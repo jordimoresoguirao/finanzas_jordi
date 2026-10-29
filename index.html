@@ -132,6 +132,7 @@ b{font-weight:700}
 .hero-acts .hero-btn{margin-top:0}
 .hero-btn2{min-height:48px;padding:0 20px;border-radius:999px;font-weight:700;color:var(--hero-ink);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.28);cursor:pointer}
 label.prow{cursor:pointer}
+.pasos a{color:var(--accent);font-weight:700;overflow-wrap:anywhere}
 .hero-skel{height:58px;width:60%;border-radius:14px;background:rgba(255,255,255,.08);margin-top:8px}
 
 /* Tarjetas y filas */
@@ -772,12 +773,12 @@ const local = {
   escribir(k, v){ try { if (v == null) localStorage.removeItem(LS + k); else localStorage.setItem(LS + k, JSON.stringify(v)); } catch(e){ console.warn(e); const err = new Error('Sin espacio'); err.code = 'quota_exceeded'; throw err; } },
   docs(){ const o = {}; for (let i = 0; i < localStorage.length; i++){ const k = localStorage.key(i) || ''; if (!k.startsWith(LS)) continue; const r = k.slice(LS.length), j = r.indexOf('/'); if (j > 0 && COLS[r.slice(0, j)]) (o[r.slice(0, j)] ||= []).push(r); } return o; },
 };
-const enLocal = (k, v) => { if (S.mode === 'local') local.escribir(k, v); };
+const enLocal = (k, v) => { if (S.mode === 'local'){ local.escribir(k, v); programarSync(); } };
 function cargarLocal(){
   const c = local.leer('cfg'); S.cfg = c ? normCfg(c) : null;
   const ks = local.docs();
   for (const [col, key] of Object.entries(COLS)) S[key] = (ks[col] || []).map(k => local.leer(k)).filter(d => d && d.id).map(d => normDoc(col, d.id, d));
-  S.meta = local.leer('meta'); S.copia = local.leer('copia');
+  S.meta = local.leer('meta'); S.copia = local.leer('copia'); S.sync = local.leer('sync');
 }
 const store = {
   async set(col, id, data){ if (CAPS.db) return CAPS.db.collection(col).doc(id).set(data); const k = COLS[col], doc = normDoc(col, id, data); enLocal(`${col}/${id}`, doc); S[k] = S[k].filter(x => x.id !== id).concat(doc); after(); },
@@ -793,8 +794,9 @@ const errMsg = e => e?.code==='quota_exceeded' ? 'No queda espacio para guardar 
   : 'No se ha podido guardar. Revisa la conexión y prueba otra vez.';
 async function guardar(fn, okMsg, undo){ try { await fn(); if (okMsg) toast(okMsg, undo); return true; } catch(e){ console.warn(e); toast(errMsg(e)); return false; } }
 
+const ordenMovs = (a,b) => a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : ((b.creado||'') > (a.creado||'') ? 1 : (b.creado||'') < (a.creado||'') ? -1 : 0);
 function after(){
-  S.movs.sort((a,b) => a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : ((b.creado||'') > (a.creado||'') ? 1 : (b.creado||'') < (a.creado||'') ? -1 : 0));
+  S.movs.sort(ordenMovs);
   schedule();
   if (S.cfg && !S.generado && S.def.cfg && S.def.rec && S.def.mov){ S.generado = true; generarRecurrentes(); }
   if (S.cfg && S.def.mov && !S.carteraLista){ S.carteraLista = true; setTimeout(abrirDesdeCartera, 80); }
@@ -893,7 +895,7 @@ function icoCat(catId, cls = ''){ const n = CAT_IC[catId]; if (n) return `<span 
 
 /* Cabeceras y piezas comunes */
 const banner = () => S.mode === 'memoria' ? `<p class="banner">Este navegador no deja guardar datos, quizá por la navegación privada. Lo que anotes se perderá al cerrar.</p>`
-  : S.mode === 'sin-acceso' ? `<p class="banner">Esta vista ya no tiene acceso a tus datos. Vuelve a abrir la app.</p>` : '';
+  : S.mode === 'sin-acceso' ? `<p class="banner">Esta vista ya no tiene acceso a tus datos. Vuelve a abrir la app.</p>` : bannerSync();
 const iniciales = () => esc((S.cfg?.nombre || 'Jordi').trim().slice(0, 2).toUpperCase());
 function vTop(t, o = {}){
   const lead = o.back ? `<button class="rbtn" data-act="back" aria-label="Volver">${ic('left')}</button>` : `<span class="avatar" aria-hidden="true">${iniciales()}</span>`;
@@ -977,7 +979,7 @@ function vInicio(){
 }
 function vCargando(){ return vTop('Hola, Jordi', {sub:fechaLarga(hoyISO()), greet:true}) + `<section class="hero" aria-busy="true"><p class="hero-cap">Abriendo tus cuentas…</p><div class="hero-skel"></div></section>`; }
 function vBienvenida(){
-  return vTop('Hola, Jordi', {sub:'Vamos a dejar tu app lista', greet:true}) + banner() + `<section class="hero"><p class="hero-cap">Contabilidad Jordi</p><p class="hero-big sm" style="margin-top:14px">Tu dinero, semana a semana</p><p class="hero-sub">En unos minutos tendrás el sobre semanal, el préstamo y tus fijos funcionando. Nada se conecta al banco: tú anotas y la app hace las cuentas.</p><div class="hero-acts"><button class="btn hero-btn" data-act="setup">Empezar</button>${S.mode !== 'db' ? '<label class="btn hero-btn2" for="fileCopia">Importar una copia</label>' : ''}</div></section>
+  return vTop('Hola, Jordi', {sub:'Vamos a dejar tu app lista', greet:true}) + banner() + `<section class="hero"><p class="hero-cap">Contabilidad Jordi</p><p class="hero-big sm" style="margin-top:14px">Tu dinero, semana a semana</p><p class="hero-sub">En unos minutos tendrás el sobre semanal, el préstamo y tus fijos funcionando. Nada se conecta al banco: tú anotas y la app hace las cuentas.</p><div class="hero-acts"><button class="btn hero-btn" data-act="setup">Empezar</button>${S.mode !== 'db' ? '<button class="btn hero-btn2" data-act="ya-datos">Ya tengo datos</button>' : ''}</div></section>
   <section class="card"><h2>Qué vas a ver</h2><ul class="feat"><li><span><b>Cuánto te queda esta semana</b> del sobre y cuánto puedes gastar al día.</span></li><li><span><b>Cuándo tocas los ahorros</b>: lo que saques de tu ahorro sale en rojo.</span></li><li><span><b>Tu préstamo</b>: lo que queda, cuándo acabas y cuánto ahorras si amortizas.</span></li><li><span><b>Los próximos 12 meses</b> con tus fijos, pagas extra y lo que ya sabes que viene.</span></li></ul></section>
   <section class="card"><h2>Ten a mano</h2><ul class="feat"><li><span>El saldo de hoy de cada cuenta, hucha e inversión.</span></li><li><span>Lo que cobras de nómina, más o menos, y cuántas pagas al año.</span></li><li><span>Del préstamo: lo que te queda por devolver, la cuota, el interés (TIN) y el día de pago. Salen en la app del banco.</span></li><li><span>Tus gastos fijos: alquiler, móvil, gimnasio, transporte…</span></li></ul></section>`;
 }
@@ -1381,11 +1383,12 @@ function vAjustes(){
      ${row('cartera', 'Pagos con la Cartera del iPhone', 'Al pagar con el móvil, se abre el gasto ya relleno')}
    </div></section>
    <section class="card"><h2>Tus datos</h2><div>
+     ${S.mode === 'local' ? row('github', 'Guardar en GitHub', syncResumen()) : ''}
      ${row('export-csv', 'Exportar movimientos', 'CSV para abrir en Excel')}
      ${row('export-json', 'Copia de seguridad completa', S.mode === 'db' ? 'Archivo JSON con todo' : `Archivo JSON con todo · ${S.copia ? `la última, el ${fechaDM(S.copia)}` : 'aún no has hecho ninguna'}`)}
      ${S.mode === 'db' ? '' : '<label class="prow" for="fileCopia"><span class="lrow-main"><span class="lrow-t">Importar una copia</span><span class="lrow-s">Trae tus datos de la versión de claude.ai o de otra copia</span></span><span class="lrow-v"><span class="chev">›</span></span></label>'}
      ${row('reset', '<span class="neg">Reiniciar configuración</span>', 'Borra cuentas, fijos y préstamo y vuelve al asistente')}
-   </div><p class="muted">${S.mode === 'db' ? 'Tus datos se guardan en esta app de claude.ai. Solo tú puedes verlos y cambiarlos, aunque compartas el enlace.' : 'Tus datos se guardan solo en este dispositivo, dentro de esta app: no se suben a ningún sitio. Haz una copia de seguridad de vez en cuando y guárdala en Archivos o en iCloud. Si borras la app de la pantalla de inicio, sus datos se borran con ella.'}</p></section>`;
+   </div><p class="muted">${S.mode === 'db' ? 'Tus datos se guardan en esta app de claude.ai. Solo tú puedes verlos y cambiarlos, aunque compartas el enlace.' : notaDatosLocal()}</p></section>`;
 }
 
 /* ----- STBY ----- */
@@ -1908,7 +1911,7 @@ function sheetCartera(){
     ${copia('cpUrl', appUrl() + '#gasto~', 'Para el paso 6')}
     <p class="note">Al final, el enlace que se abre queda así: …#gasto~12.30~MERCADONA. La primera vez que pagues en un sitio, revisa la categoría. Las siguientes, la app recuerda la que usaste.</p>
     <p class="note">Si alguna vez pagas con el BBVA, crea otra automatización igual para esa tarjeta y añade <b>~bbva</b> al final del texto del paso 3: el gasto irá a esa cuenta.</p>
-    ${S.mode === 'db' ? '' : '<p class="note warn">Ojo: Atajos abre el enlace en Safari, y el icono de la pantalla de inicio guarda sus datos aparte de Safari. Si usas esta automatización, abre la app siempre desde Safari, no desde el icono.</p>'}
+    ${S.mode === 'db' ? '' : '<p class="note warn">Ojo: Atajos abre el enlace en Safari, y el icono de la pantalla de inicio guarda sus datos aparte de Safari. Conecta los dos a GitHub (Ajustes → Guardar en GitHub) y verás lo mismo en ambos.</p>'}
     <a class="btn ghost" href="#gasto~12.30~Mercadona_prueba">Probar con un gasto de ejemplo</a>
   </div>`, root => {
     root.addEventListener('click', async e => { const b = e.target.closest('[data-copy]'); if (!b) return; const inp = root.querySelector('#' + b.dataset.copy);
@@ -2095,6 +2098,7 @@ function importarCopia(d){
   for (const [col, key] of Object.entries(COLS)) S[key] = cols[col];
   S.cfg = cfg; S.meta = null; S.mes = null; S.generado = false;
   after();
+  programarSync(0);
 }
 function sheetImportar(d){
   const n = k => Array.isArray(d[k]) ? d[k].filter(x => x && x.id).length : 0;
@@ -2104,12 +2108,190 @@ function sheetImportar(d){
   openSheet('Importar una copia', `<div class="form">
     <p class="lead">Copia de seguridad${cuando}. Trae:</p>
     <ul class="feat">${li(n('cuentas'), 'cuenta', 'cuentas')}${li(n('movimientos'), 'movimiento', 'movimientos')}${li(n('fijos'), 'fijo mensual', 'fijos mensuales')}${li(n('prestamos'), 'préstamo', 'préstamos')}${li(n('planificados'), 'planificado', 'planificados')}${li(n('objetivos'), 'objetivo', 'objetivos')}${li(n('stby'), 'billete de STBY', 'billetes de STBY')}<li><span>Sobre, sueldo, categorías y presupuesto</span></li></ul>
-    ${hay ? '<p class="note warn">Sustituye todo lo que tienes ahora en esta app.</p><button type="button" class="btn ghost" data-act="export-json">Descargar una copia antes</button>' : ''}
+    ${hay ? '<p class="note warn">Sustituye todo lo que tienes ahora en esta app' + (S.sync?.token ? ' y en GitHub' : '') + '.</p><button type="button" class="btn ghost" data-act="export-json">Descargar una copia antes</button>' : ''}
     <p class="err" role="alert"></p>
     <div class="actions"><button type="button" class="btn ghost" data-act="close">Cancelar</button><button type="button" class="btn primary" id="imGo">Importar</button></div></div>`, root => {
     const go = root.querySelector('#imGo');
     const run = () => { try { importarCopia(d); } catch(e){ console.warn(e); root.querySelector('.err').textContent = errMsg(e); return; } closeSheet(); S.tab = 'inicio'; S.hist = []; window.scrollTo(0,0); render(); toast('Copia importada'); };
     if (hay) armar(go, 'Toca otra vez para sustituir', run); else go.addEventListener('click', run);
+  });
+}
+
+/* ===== Guardar en GitHub: datos.json en un repositorio privado del usuario ===== */
+/* El dispositivo sigue guardándolo todo en local (funciona sin conexión) y se sincroniza al abrir y tras cada cambio. */
+const GH_API = 'https://api.github.com', GH_ARCHIVO = 'datos.json';
+const b64 = {
+  de(s){ const bin = atob(String(s || '').replace(/\s/g, '')), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new TextDecoder().decode(u); },
+  a(str){ const u = new TextEncoder().encode(str); let bin = ''; for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(bin); },
+};
+const ghError = code => { const e = new Error(code); e.code = code; return e; };
+async function gh(ruta, opts = {}, token = S.sync?.token){
+  let res;
+  try { res = await fetch(GH_API + ruta, {method:opts.method || 'GET', cache:'no-store', headers:{Accept:'application/vnd.github+json', Authorization:'Bearer ' + token, ...(opts.body ? {'Content-Type':'application/json'} : {})}, body:opts.body ? JSON.stringify(opts.body) : undefined}); }
+  catch { throw ghError('red'); }
+  if (res.ok) return res.json();
+  throw ghError({401:'token', 403:'permiso', 404:'no-existe', 409:'conflicto', 422:'conflicto'}[res.status] || 'servidor');
+}
+const ghMsg = e => ({
+  red:'No hay conexión con GitHub.',
+  token:'El token no es válido o ha caducado. Crea uno nuevo y vuelve a conectar.',
+  permiso:'El token no deja escribir en el repositorio. Dale permiso de lectura y escritura en «Contents».',
+  'no-existe':'No encuentro ese repositorio. Revisa el nombre y que el token tenga acceso a él.',
+  publico:'Ese repositorio es público y cualquiera vería tus datos. Hazlo privado o usa otro.',
+  formato:`El archivo ${GH_ARCHIVO} del repositorio no es una copia de esta app.`,
+  conflicto:'Ha habido cambios a la vez desde otro dispositivo. Vuelve a intentarlo.',
+}[e?.code] || 'GitHub ha dado un error. Prueba otra vez en un rato.');
+async function ghLeer(sy = S.sync){
+  let r; try { r = await gh(`/repos/${sy.repo}/contents/${GH_ARCHIVO}`, {}, sy.token); } catch(e){ if (e.code === 'no-existe') return {sha:null, datos:null}; throw e; }
+  let c = r.content; if (!c && r.sha) c = (await gh(`/repos/${sy.repo}/git/blobs/${r.sha}`, {}, sy.token)).content;
+  let datos = null; try { datos = JSON.parse(b64.de(c)); } catch {}
+  if (!datos || typeof datos !== 'object' || Array.isArray(datos)) throw ghError('formato');
+  return {sha:r.sha, datos};
+}
+async function ghEscribir(d, sha){
+  const body = {message:`Datos actualizados (${fechaCorta(hoyISO())})`, content:b64.a(JSON.stringify(d, null, 2))}; if (sha) body.sha = sha;
+  try { return {sha:(await gh(`/repos/${S.sync.repo}/contents/${GH_ARCHIVO}`, {method:'PUT', body})).content.sha}; }
+  catch(e){ if (e.code === 'conflicto') return {conflicto:true}; throw e; }
+}
+
+/* Foto de los datos {cfg, cuentas:{id:doc}, mov:{…}…}, ya normalizada, para comparar documento a documento */
+function copiaDatos(){ return {app:'Contabilidad Jordi', exportado:new Date().toISOString(), config:S.cfg, cuentas:S.cuentas, movimientos:S.movs, fijos:S.recs, planificados:S.plans, prestamos:S.deudas, objetivos:S.objs, stby:S.stby}; }
+function foto(d){
+  const f = {cfg: d?.config && typeof d.config === 'object' ? normCfg(d.config) : null};
+  for (const [col, k] of Object.entries(COPIA)) f[col] = Object.fromEntries((Array.isArray(d?.[k]) ? d[k] : []).filter(x => x && x.id).map(x => [String(x.id), normDoc(col, String(x.id), x)]));
+  return f;
+}
+function aCopia(f){ const d = {app:'Contabilidad Jordi', exportado:new Date().toISOString(), config:f.cfg}; for (const [col, k] of Object.entries(COPIA)){ d[k] = Object.values(f[col]); if (col === 'mov') d[k].sort(ordenMovs); } return d; }
+const estable = v => v == null ? '∅' : JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(kk => [kk, x[kk]])) : x);
+const vacia = f => !f.cfg && Object.keys(COPIA).every(col => !Object.keys(f[col]).length);
+/* Fusión a tres bandas con la última versión sincronizada (B): si este dispositivo cambió algo, gana lo suyo; si no, lo de GitHub */
+function fusionar(B, L, R){
+  const una = (b, l, r) => estable(l) === estable(b) ? r : l;
+  const f = {cfg: una(B.cfg, L.cfg, R.cfg) || null};
+  for (const col of Object.keys(COPIA)){ f[col] = {}; for (const id of new Set([...Object.keys(B[col]), ...Object.keys(L[col]), ...Object.keys(R[col])])){ const v = una(B[col][id], L[col][id], R[col][id]); if (v) f[col][id] = v; } }
+  return f;
+}
+/* Deja este dispositivo igual que la foto f, escribiendo solo lo que cambia */
+function aplicarFoto(f){
+  const L = foto(copiaDatos()); let cambia = false;
+  if (estable(L.cfg) !== estable(f.cfg)){ local.escribir('cfg', f.cfg); cambia = true; }
+  for (const col of Object.keys(COPIA)) for (const id of new Set([...Object.keys(L[col]), ...Object.keys(f[col])])) if (estable(L[col][id]) !== estable(f[col][id])){ local.escribir(`${col}/${id}`, f[col][id] || null); cambia = true; }
+  if (!cambia) return false;
+  S.cfg = f.cfg; for (const col of Object.keys(COPIA)) S[COLS[col]] = Object.values(f[col]);
+  after(); if (S.cfg) setTimeout(generarRecurrentes, 300);
+  return true;
+}
+
+let syncT = 0, syncPend = false, syncando = false, syncOtra = false;
+function programarSync(ms = 1500){ if (S.mode !== 'local' || !S.sync?.token) return; syncPend = true; clearTimeout(syncT); syncT = setTimeout(sincronizar, ms); }
+function estadoSync(o){ if (!S.sync) return; Object.assign(S.sync, o); try { local.escribir('sync', S.sync); } catch {} schedule(); }
+async function sincronizar(){
+  if (S.mode !== 'local' || !S.sync?.token) return;
+  if (syncando){ syncOtra = true; return; }
+  syncando = true; syncPend = false; clearTimeout(syncT);
+  try {
+    for (let i = 0; i < 4; i++){
+      const rem = await ghLeer();
+      if (!S.sync?.token) return;
+      /* Si en GitHub no hay archivo (o lo han borrado), no se toma como «borrar todo»: se vuelve a subir lo de aquí */
+      const R = foto(rem.datos), B = rem.datos ? foto(local.leer('sync-base')) : foto(null), M = fusionar(B, foto(copiaDatos()), R);
+      aplicarFoto(M);
+      let sha = rem.sha;
+      if (estable(M) !== estable(R) && !(vacia(M) && !rem.sha)){ estadoSync({estado:'subiendo'}); const w = await ghEscribir(aCopia(M), rem.sha); if (w.conflicto) continue; sha = w.sha; }
+      local.escribir('sync-base', aCopia(M));
+      estadoSync({estado:'ok', sha, ultima:new Date().toISOString(), error:null});
+      return;
+    }
+    throw ghError('conflicto');
+  } catch(e){ console.warn(e); estadoSync(e?.code === 'red' ? {estado:'sin-conexion', error:null} : {estado:'error', error:ghMsg(e)}); }
+  finally { syncando = false; if (syncOtra){ syncOtra = false; programarSync(300); } }
+}
+
+function hace(iso){
+  if (!iso) return 'nunca'; const d = new Date(iso), min = Math.round((Date.now() - d)/60000);
+  if (min < 1) return 'ahora mismo'; if (min < 60) return `hace ${min} min`;
+  const f = toISO(d); return f === hoyISO() ? `hoy a las ${pad(d.getHours())}:${pad(d.getMinutes())}` : `el ${fechaDM(f)}`;
+}
+function syncResumen(){
+  const sy = S.sync; if (!sy?.token) return 'Tus datos en un repositorio privado tuyo y en todos tus dispositivos';
+  if (sy.estado === 'error') return `<span class="neg">${esc(sy.error)}</span>`;
+  if (sy.estado === 'sin-conexion') return 'Sin conexión: se guardará cuando vuelva';
+  if (sy.estado === 'subiendo' || syncPend) return 'Guardando…';
+  return `${esc(sy.repo)} · guardado ${hace(sy.ultima)}`;
+}
+const bannerSync = () => S.mode === 'local' && S.sync?.token && S.sync.estado === 'error' ? `<p class="banner" style="background:var(--warn-soft)">No se han podido guardar tus datos en GitHub. ${esc(S.sync.error)} <button class="link" data-act="github">Revisar</button></p>` : '';
+const notaDatosLocal = () => S.sync?.token ? `Tus datos se guardan en este dispositivo y en tu repositorio privado ${esc(S.sync.repo)} de GitHub, que guarda un historial con cada cambio. Si borras la app, vuelve a conectarla y lo recuperas todo.`
+  : 'Tus datos se guardan solo en este dispositivo, dentro de esta app. Guárdalos en GitHub o haz una copia de seguridad de vez en cuando: si borras la app de la pantalla de inicio, sus datos se borran con ella.';
+const limpiarRepo = s => { const r = String(s || '').trim().replace(/^https?:\/\/(www\.)?github\.com\//i, '').replace(/\.git$/i, '').replace(/\/+$/, ''); return /^[\w.-]+\/[\w.-]+$/.test(r) ? r : ''; };
+function activarSync(sy, base){ S.sync = {...sy, estado:'ok', error:null}; local.escribir('sync', S.sync); local.escribir('sync-base', base || null); sincronizar(); }
+
+function sheetYaDatos(){
+  openSheet('Ya tengo datos', `<div class="form"><p class="lead">¿De dónde los traes?</p><div>
+    <button class="prow" data-act="github"><span class="lrow-main"><span class="lrow-t">De GitHub</span><span class="lrow-s">Si ya los guardas en un repositorio privado</span></span><span class="lrow-v"><span class="chev">›</span></span></button>
+    <label class="prow" for="fileCopia"><span class="lrow-main"><span class="lrow-t">De una copia de seguridad</span><span class="lrow-s">El archivo JSON de la versión de claude.ai o de esta app</span></span><span class="lrow-v"><span class="chev">›</span></span></label>
+  </div></div>`);
+}
+function sheetGithub(){
+  const sy = S.sync; if (!sy?.token) return sheetGithubConectar();
+  const nota = sy.estado === 'error' ? `<p class="note warn">${esc(sy.error)}</p>` : sy.estado === 'sin-conexion' ? '<p class="note">Ahora no hay conexión con GitHub. Lo que anotes se queda en este dispositivo y se sube cuando vuelva.</p>' : '<p class="note">Cada cambio se guarda solo en GitHub a los pocos segundos. En otro dispositivo conectado al mismo repositorio verás lo mismo.</p>';
+  openSheet('Guardar en GitHub', `<div class="form">
+    <div class="dstats"><div class="stat"><span>Repositorio</span><b style="font-size:15px;overflow-wrap:anywhere">${esc(sy.repo)}</b></div><div class="stat"><span>Último guardado</span><b style="font-size:15px">${cap(hace(sy.ultima))}</b></div></div>
+    ${nota}
+    <button type="button" class="btn primary" id="ghYa">Guardar ahora</button>
+    <a class="btn ghost" href="https://github.com/${esc(sy.repo)}/commits/${esc(sy.rama || 'main')}/${GH_ARCHIVO}" target="_blank" rel="noopener">Ver el historial de cambios</a>
+    ${sy.estado === 'error' ? '<button type="button" class="btn ghost" id="ghOtra">Conectar con otro token</button>' : ''}
+    <button type="button" class="btn danger" id="ghOff">Desconectar este dispositivo</button>
+    <p class="note" style="text-align:center">Al desconectar, tus datos se quedan aquí y en GitHub. Solo se olvida el token.</p></div>`, root => {
+    const q = x => root.querySelector(x);
+    q('#ghYa').addEventListener('click', async () => { const b = q('#ghYa'); b.disabled = true; b.textContent = 'Guardando…'; await sincronizar(); if (b.isConnected) sheetGithub(); });
+    q('#ghOtra')?.addEventListener('click', () => sheetGithubConectar(sy.repo));
+    armar(q('#ghOff'), 'Toca otra vez para desconectar', () => { clearTimeout(syncT); syncPend = false; S.sync = null; local.escribir('sync', null); local.escribir('sync-base', null); closeSheet(); render(); toast('Desconectado de GitHub'); });
+  });
+}
+function sheetGithubConectar(repoPre = ''){
+  openSheet('Guardar en GitHub', `<form id="fGh" class="form" novalidate>
+    <p class="lead">Guarda tus datos en un repositorio privado de tu GitHub: los tendrás en todos tus dispositivos, y GitHub guarda un historial con cada cambio.</p>
+    <ol class="pasos">
+      <li>En GitHub, crea un repositorio nuevo <b>privado</b> para los datos, por ejemplo <b>contabilidad-datos</b>. No uses el de la app, que es público.</li>
+      <li>Crea un token en <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a>. En <b>Repository access</b>, elige <b>Only select repositories</b> y marca solo el de los datos. En <b>Permissions</b>, añade <b>Contents</b> con <b>Read and write</b>.</li>
+      <li>Pulsa <b>Generate token</b>, cópialo y pégalo aquí.</li>
+    </ol>
+    <div class="fld"><label for="ghRepo">Repositorio</label><input id="ghRepo" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="tu-usuario/contabilidad-datos" value="${esc(repoPre)}"></div>
+    <div class="fld"><label for="ghTok">Token</label><input id="ghTok" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…"></div>
+    <p class="note">El token se guarda solo en este dispositivo y solo da acceso a ese repositorio. Si caduca, crea otro y vuelve a conectar.</p>
+    <div id="ghElige"></div>
+    ${actions(false, 'Conectar')}</form>`, root => {
+    const q = x => root.querySelector(x), err = q('.err'), go = q('button[type=submit]');
+    const listo = msg => { closeSheet(); S.tab = 'inicio'; S.hist = []; window.scrollTo(0,0); render(); toast(msg); };
+    const elegir = (rem, sy) => {
+      const n = (rem.datos.movimientos || []).length, ex = new Date(rem.datos.exportado);
+      go.closest('.actions').hidden = true;
+      q('#ghElige').innerHTML = `<div class="calc"><h3 class="section-t">Ya hay datos en ese repositorio</h3><p>${n} ${n === 1 ? 'movimiento' : 'movimientos'}${isFinite(ex) ? `, guardados el ${fechaDM(toISO(ex))}` : ''}. En este dispositivo también tienes datos. ¿Con cuáles te quedas?</p>
+        <button type="button" class="btn primary" id="ghRem">Usar los de GitHub</button><button type="button" class="btn ghost" id="ghLoc">Subir los de este dispositivo</button>
+        <p class="note">Si usas los de GitHub, los de este dispositivo se borran: descarga antes una copia si los quieres guardar. Si subes los de aquí, los de GitHub se quedan en su historial.</p>
+        <button type="button" class="btn ghost" data-act="export-json">Descargar una copia de este dispositivo</button></div>`;
+      q('#ghRem').addEventListener('click', () => { try { aplicarFoto(foto(rem.datos)); activarSync(sy, rem.datos); listo('Conectado. Datos traídos de GitHub'); } catch(e){ err.textContent = errMsg(e); } });
+      armar(q('#ghLoc'), 'Toca otra vez para sustituir los de GitHub', () => { try { activarSync(sy, rem.datos); listo('Conectado. Subiendo tus datos a GitHub…'); } catch(e){ err.textContent = errMsg(e); } });
+    };
+    q('#fGh').addEventListener('submit', async e => {
+      e.preventDefault(); err.textContent = '';
+      const repo = limpiarRepo(q('#ghRepo').value), token = q('#ghTok').value.trim();
+      if (!repo){ err.textContent = 'Escribe el repositorio así: tu-usuario/contabilidad-datos.'; q('#ghRepo').focus(); return; }
+      if (!token){ err.textContent = 'Pega el token.'; q('#ghTok').focus(); return; }
+      go.disabled = true; go.textContent = 'Conectando…';
+      try {
+        const info = await gh(`/repos/${repo}`, {}, token);
+        if (!info.private) throw ghError('publico');
+        const sy = {repo:info.full_name, token, rama:info.default_branch || 'main'};
+        /* Mismo repositorio con un token nuevo: se conserva la base y se fusiona lo pendiente */
+        if (S.sync?.repo === sy.repo){ activarSync(sy, local.leer('sync-base')); return listo('Conectado otra vez'); }
+        const rem = await ghLeer(sy), R = foto(rem.datos), L = foto(copiaDatos());
+        if (!vacia(R) && !vacia(L) && estable(R) !== estable(L)) return elegir(rem, sy);
+        if (!vacia(R)) aplicarFoto(R);
+        activarSync(sy, rem.datos);
+        listo(vacia(R) ? 'Conectado. Subiendo tus datos a GitHub…' : 'Conectado. Datos traídos de GitHub');
+      } catch(e){ console.warn(e); err.textContent = e?.code ? ghMsg(e) : errMsg(e); go.disabled = false; go.textContent = 'Conectar'; }
+    });
   });
 }
 
@@ -2130,7 +2312,7 @@ const descargaLocal = {
 async function exportar(tipo){
   if (!CAPS.dl) return toast('Desde esta vista no se pueden descargar archivos.');
   const hoy = hoyISO(); let filename, data;
-  if (tipo === 'json'){ filename = `contabilidad-jordi-${hoy}.json`; data = JSON.stringify({app:'Contabilidad Jordi', exportado:new Date().toISOString(), config:S.cfg, cuentas:S.cuentas, movimientos:S.movs, fijos:S.recs, planificados:S.plans, prestamos:S.deudas, objetivos:S.objs, stby:S.stby}, null, 2); }
+  if (tipo === 'json'){ filename = `contabilidad-jordi-${hoy}.json`; data = JSON.stringify(copiaDatos(), null, 2); }
   else {
     const cell = s => { s = String(s ?? ''); return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
     const rows = [['Fecha','Mes','Tipo','Importe','Categoría','Cuenta','Desde','Hacia','Detalle']].concat([...S.movs].reverse().map(m => [m.fecha, mesDe(m), TIPO_L[m.tipo], fmtIn(m.importe), m.cat ? catNombre(m.cat) : '', m.cuenta ? ctaNombre(m.cuenta) : '', m.desde ? ctaNombre(m.desde) : '', m.hacia ? ctaNombre(m.hacia) : '', m.detalle || '']));
@@ -2179,6 +2361,7 @@ const ACT = {
   reset: () => sheetReset(),
   cartera: () => sheetCartera(),
   'anotar-nomina': b => { const rc = S.recs.find(x => x.id === b.dataset.id); if (!rc) return; const p = nominaPendiente(rc, hoyISO()) || {}; sheetMov(null, {tipo:'ingreso', cat:rc.cat, cuenta:rc.cuenta, detalle:rc.detalle || 'Nómina', nota: p.ult ? `La última fue de ${eur(p.ult.importe)}.` : `Tu estimación: unos ${eur(rc.importe, {dec:0})}.`}); },
+  github: () => sheetGithub(), 'ya-datos': () => sheetYaDatos(),
   undo: () => { const u = toastUndo; toastUndo = null; $('#toast').hidden = true; if (u) u(); },
 };
 document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (!b || b.disabled) return; const f = ACT[b.dataset.act]; if (f){ e.preventDefault(); f(b, e); } });
@@ -2199,7 +2382,8 @@ document.addEventListener('submit', e => {
     guardar(() => store.set('mov', id, doc), `Anotado: ${eur(p.importe)} en ${c.nombre}${p.fecha !== hoyISO() ? ' (' + fechaCorta(p.fecha) + ')' : ''}`, () => guardar(() => store.del('mov', id), 'Deshecho'));
   } else { S.quick = ''; sheetMov(null, {tipo:p.tipo, importe: p.importe > 0 ? p.importe : '', cat:p.cat, detalle:p.detalle, fecha:p.fecha}); }
 });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible'){ schedule(); if (S.cfg) generarRecurrentes(); } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible'){ schedule(); if (S.cfg) generarRecurrentes(); programarSync(300); } else if (syncPend) sincronizar(); });
+window.addEventListener('online', () => programarSync(0));
 
 /* ===== Arranque ===== */
 async function init(){
@@ -2215,6 +2399,7 @@ async function init(){
     for (const k of ['cfg', ...Object.keys(COLS)]) S.def[k] = true;
     after();
     if (S.mode === 'local'){
+      if (S.sync?.token) sincronizar();
       try { navigator.storage?.persist?.(); } catch {}
       if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
     }
