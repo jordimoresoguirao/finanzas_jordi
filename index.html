@@ -793,7 +793,7 @@ function normCfg(d){
   const c = JSON.parse(JSON.stringify(d||{}));
   c.categorias = Array.isArray(c.categorias) && c.categorias.length ? c.categorias.map(x => ({...x, presupuesto:Number(x.presupuesto)||0, palabras:Array.isArray(x.palabras) ? x.palabras : []})) : CATS_DEF.map(x => ({...x, presupuesto:0}));
   c.sobre = {importe:0, dia:1, cuenta:'', origen:'', ...(c.sobre||{})}; c.sobre.importe = Number(c.sobre.importe)||0; c.sobre.dia = Number(c.sobre.dia); if (!(c.sobre.dia >= 0 && c.sobre.dia <= 6)) c.sobre.dia = 1;
-  c.sueldo = {pagas:12, extra:0, meses:[6,12], ...(c.sueldo||{})};
+  c.sueldo = {pagas:12, extra:0, meses:[6,12], para:'siguiente', ...(c.sueldo||{})};
   if (c.ipc == null) c.ipc = IPC_DEF;
   c.nombre = c.nombre || 'Jordi';
   return c;
@@ -813,6 +813,9 @@ function cargarLocal(){
   for (const [col, key] of Object.entries(COLS)) S[key] = (ks[col] || []).map(k => local.leer(k)).filter(d => d && d.id).map(d => normDoc(col, d.id, d));
   S.meta = local.leer('meta'); S.copia = local.leer('copia'); S.sync = local.leer('sync');
 }
+/* Mes en que cuenta una nómina cobrada en `fecha` (−1, 0 o +1). Si es para el mes siguiente (Ajustes → Sueldo y pagas),
+   la cobrada desde el día 15 cuenta en el siguiente; si es para el mismo mes, la de los primeros días cuenta en el anterior. */
+const offNomina = fecha => { const d = Number(String(fecha).slice(8)); return S.cfg?.sueldo?.para === 'mismo' ? (d <= 7 ? -1 : 0) : (d >= 15 ? 1 : 0); };
 const store = {
   async set(col, id, data){ if (CAPS.db) return CAPS.db.collection(col).doc(id).set(data); const k = COLS[col], doc = normDoc(col, id, data); enLocal(`${col}/${id}`, doc); S[k] = S[k].filter(x => x.id !== id).concat(doc); after(); },
   async del(col, id){ if (CAPS.db) return CAPS.db.collection(col).doc(id).delete(); const k = COLS[col]; enLocal(`${col}/${id}`, null); S[k] = S[k].filter(x => x.id !== id); after(); },
@@ -860,7 +863,8 @@ async function generarRecurrentes(){
         if (CAPS.db){ const snap = await CAPS.db.collection('mov').doc(id).get(); if (snap.exists) continue; }
         let importe = rc.importe;
         if (rc.deuda){ const d = S.deudas.find(x => x.id === rc.deuda); if (d){ const e = estadoDeuda(d, S.movs, addDays(fecha, -1)); if (!(e.pendiente > 0.005)) continue; importe = r2(Math.min(d.cuota, e.pendiente*(1 + e.r))); } }
-        await store.set('mov', id, {fecha, tipo:rc.tipo, importe, cat:rc.cat||null, cuenta:rc.cuenta||null, desde:rc.desde||null, hacia:rc.hacia||null, detalle:rc.detalle||'', rec:rc.id, creado:new Date().toISOString()});
+        const off = rc.tipo === 'ingreso' && rc.cat === 'nomina' ? offNomina(fecha) : 0;
+        await store.set('mov', id, {fecha, tipo:rc.tipo, importe, cat:rc.cat||null, cuenta:rc.cuenta||null, desde:rc.desde||null, hacia:rc.hacia||null, detalle:rc.detalle||'', rec:rc.id, mes: off ? addMonths(ym, off) : null, creado:new Date().toISOString()});
       }
     }
   } catch(e){ console.warn(e); }
@@ -1091,7 +1095,8 @@ function vStbyMini(){
 function vMovimientos(){
   if (!S.cfg) return vSinCfg('Movimientos');
   const hoy = hoyISO(), cur = ymOf(hoy), ym = S.mes || cur, q = S.q.trim().toLowerCase(), cm = ctasMap(), min = ymOf(ventana());
-  const enMes = S.movs.filter(m => mesDe(m) === ym);
+  /* Lo cobrado o pagado este mes, y lo que cuenta en este mes aunque tenga otra fecha (la nómina del mes siguiente sale en los dos) */
+  const enMes = S.movs.filter(m => mesDe(m) === ym || ymOf(m.fecha) === ym);
   const hay = m => [m.detalle, catNombre(m.cat), ctaNombre(m.cuenta), ctaNombre(m.desde), ctaNombre(m.hacia), TIPO_L[m.tipo]].join(' ').toLowerCase();
   const ft = S.ftipo && S.ftipo !== 'todos' ? S.ftipo : '';
   const list = enMes.filter(m => (!ft || m.tipo === ft) && (!S.fcta || m.cuenta === S.fcta || m.desde === S.fcta || m.hacia === S.fcta) && (!S.fcat || m.cat === S.fcat) && (!q || hay(m).includes(q)));
@@ -1480,7 +1485,7 @@ const isYM = s => /^\d{4}-\d{2}$/.test(s);
 function sheetMov(m, pre = {}){
   const edit = !!m, st = {tipo: m?.tipo || pre.tipo || 'gasto', cat: m?.cat || pre.cat || null, ctaTocada: edit || !!pre.cuenta};
   const v = (k, d = '') => m?.[k] ?? pre[k] ?? d, imp = v('importe', '');
-  st.off = m?.mes && monthsBetween(ymOf(m.fecha), m.mes) === -1 ? -1 : 0; st.offTocado = edit;
+  st.off = m?.mes ? Math.max(-1, Math.min(1, monthsBetween(ymOf(m.fecha), m.mes))) : 0; st.offTocado = edit;
   openSheet(edit ? 'Editar movimiento' : 'Nuevo movimiento', `<form id="fMov" class="form" novalidate>
     ${segHTML(['gasto','ingreso','traspaso'], st.tipo)}<p class="hint" id="mHint"></p>
     <div class="fld"><label for="mImporte">Importe</label><div class="amount"><input id="mImporte" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${imp !== '' && isFinite(imp) ? fmtIn(imp) : ''}"><span aria-hidden="true">€</span></div>${pre.nota ? `<span class="note">${esc(pre.nota)}</span>` : ''}</div>
@@ -1489,7 +1494,7 @@ function sheetMov(m, pre = {}){
     <div class="grid2" id="mTrasWrap"><div class="fld"><label for="mDesde">Desde</label><select id="mDesde">${optsCuentas()}</select></div><div class="fld"><label for="mHacia">Hacia</label><select id="mHacia">${optsCuentas(true)}</select></div><p class="note full" id="mTrasNote"></p></div>
     <div class="fld"><label for="mDetalle">Detalle <i>(opcional)</i></label><input id="mDetalle" autocomplete="off" placeholder="Ej: compra del finde" value="${esc(v('detalle'))}"></div>
     <div class="fld"><label for="mFecha">Fecha</label><input type="date" id="mFecha" value="${esc(v('fecha', hoyISO()))}"></div>
-    <div class="fld" id="mMesW"><span class="lbl">Cuenta en el mes de</span><div class="seg" id="mMes" role="group" aria-label="Mes en que cuenta"><button type="button" data-o="0"></button><button type="button" data-o="-1"></button></div><span class="note">Si cobras a principios de mes lo del mes anterior, elige el anterior.</span></div>
+    <div class="fld" id="mMesW"><span class="lbl">Cuenta en el mes de</span><div class="seg" id="mMes" role="group" aria-label="Mes en que cuenta"><button type="button" data-o="-1"></button><button type="button" data-o="0"></button><button type="button" data-o="1"></button></div><span class="note">Si es la nómina del mes siguiente, o la del anterior, elige ese mes: contará en sus números.</span></div>
     <p class="note" id="mBaseNote" hidden></p>
     ${!edit ? '<label class="check"><input type="checkbox" id="mRepite"><span>Se repite todos los meses este mismo día</span></label>' : m.rec ? '<p class="note">Viene de un fijo mensual. Si lo cambias, solo cambia el de este mes.</p>' : ''}
     ${actions(edit)}${edit ? '<button type="button" class="btn danger" id="mDel">Eliminar movimiento</button>' : `<button type="button" class="btn danger" data-act="new-stby" style="color:var(--accent)">${ic('ticket', 18)} ¿Es un billete STBY? Apúntalo aquí</button>`}</form>`, root => {
@@ -1511,7 +1516,7 @@ function sheetMov(m, pre = {}){
       n.hidden = !c; if (c) n.textContent = `Es anterior al ${fechaCorta(c.fechaBase)}, cuando pusiste el saldo de ${c.nombre}: no cambia el saldo, solo cuenta en tus números del mes.`; };
     const syncMes = () => { const w = q('#mMesW'); w.hidden = st.tipo !== 'ingreso'; if (w.hidden) return;
       const f = q('#mFecha').value || hoyISO(), ym = ymOf(f);
-      if (!st.offTocado) st.off = (st.cat === 'nomina' && Number(f.slice(8)) <= 7) ? -1 : 0;
+      if (!st.offTocado) st.off = st.cat === 'nomina' ? offNomina(f) : 0;
       w.querySelectorAll('button').forEach(b => { const o = Number(b.dataset.o); b.textContent = cap(mesNombre(addMonths(ym, o))); b.setAttribute('aria-pressed', String(o === st.off)); }); };
     const sync = () => {
       root.querySelectorAll('.seg button[data-t]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.t === st.tipo)));
@@ -1761,25 +1766,27 @@ function sheetSobre(){
 
 /* Sueldo, pagas e IPC */
 function sheetSueldo(){
-  const c = S.cfg, su = c.sueldo, st = {pagas:Number(su.pagas) === 14 ? 14 : 12, meses:new Set(su.meses || [6,12])};
+  const c = S.cfg, su = c.sueldo, st = {pagas:Number(su.pagas) === 14 ? 14 : 12, meses:new Set(su.meses || [6,12]), para: su.para === 'mismo' ? 'mismo' : 'siguiente'};
   openSheet('Sueldo y pagas', `<form id="fSu" class="form" novalidate>
     <div class="fld"><label for="suNom">Tu nombre</label><input id="suNom" autocomplete="off" value="${esc(c.nombre)}"></div>
     <div class="fld"><label for="suCta">Cuenta de la nómina y los fijos</label><select id="suCta">${optsCuentas()}</select></div>
     <div class="fld"><span class="lbl">Pagas al año</span><div class="seg" id="suP"><button type="button" data-p="12">12 pagas</button><button type="button" data-p="14">14 pagas</button></div></div>
     <div id="suExW" class="form"><div class="fld"><label for="suEx">Importe de cada paga extra</label><div class="amount sm"><input id="suEx" inputmode="decimal" placeholder="0" value="${su.extra ? fmtIn(su.extra) : ''}"><span>€</span></div></div>
       <div class="fld"><span class="lbl">Meses en que la cobras</span><div class="chips monthchips" id="suM">${MESES_C.map((m,i) => `<button type="button" class="chip" data-m="${i+1}">${m}</button>`).join('')}</div></div></div>
+    <div class="fld"><span class="lbl">La nómina que cobras a final de mes es para</span><div class="seg" id="suPara"><button type="button" data-v="siguiente">El mes siguiente</button><button type="button" data-v="mismo">Ese mismo mes</button></div><span class="note">Con «El mes siguiente», la nómina que cobras a partir del día 15 cuenta en los números del mes siguiente, que es el que paga. Al anotarla puedes cambiarlo.</span></div>
     <p class="note">La nómina se cambia en Movimientos → Fijos. Ahí puedes marcar si cambia cada mes.</p>
     <div class="fld"><label for="suIpc">IPC anual para la proyección</label><div class="amount sm"><input id="suIpc" inputmode="decimal" value="${fmtIn(ipcAnual())}"><span>%</span></div><span class="note">Último dato publicado: ${fmtIn(IPC_DEF)} % (${IPC_FUENTE}).</span></div>
     ${actions(true)}</form>`, root => {
     const q = x => root.querySelector(x); setSel(q('#suCta'), c.cuentaPrincipal);
-    const sync = () => { root.querySelectorAll('#suP button').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.p) === st.pagas))); q('#suExW').hidden = st.pagas !== 14; root.querySelectorAll('#suM button').forEach(b => b.setAttribute('aria-pressed', String(st.meses.has(Number(b.dataset.m))))); };
+    const sync = () => { root.querySelectorAll('#suP button').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.p) === st.pagas))); q('#suExW').hidden = st.pagas !== 14; root.querySelectorAll('#suM button').forEach(b => b.setAttribute('aria-pressed', String(st.meses.has(Number(b.dataset.m))))); root.querySelectorAll('#suPara button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === st.para))); };
+    q('#suPara').addEventListener('click', e => { const b = e.target.closest('button'); if (b){ st.para = b.dataset.v; sync(); } });
     q('#suP').addEventListener('click', e => { const b = e.target.closest('button'); if (b){ st.pagas = Number(b.dataset.p); sync(); } });
     q('#suM').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const m = Number(b.dataset.m); st.meses.has(m) ? st.meses.delete(m) : st.meses.add(m); sync(); });
     sync();
     q('#fSu').addEventListener('submit', e => {
       e.preventDefault(); const ex = q('#suEx').value.trim() ? parseImporte(q('#suEx').value) : 0, ipc = parseImporte(q('#suIpc').value);
       if (!(ex >= 0)){ q('.err').textContent = 'El importe de la paga extra no es válido.'; return; } if (!(ipc > -10 && ipc < 100)){ q('.err').textContent = 'Escribe el IPC como porcentaje, por ejemplo 4,9.'; return; }
-      const nuevo = {...c, nombre:q('#suNom').value.trim() || 'Jordi', cuentaPrincipal:q('#suCta').value, ipc:r2(ipc), sueldo:{pagas:st.pagas, extra:r2(ex), meses:[...st.meses].sort((a,b) => a - b)}};
+      const nuevo = {...c, nombre:q('#suNom').value.trim() || 'Jordi', cuentaPrincipal:q('#suCta').value, ipc:r2(ipc), sueldo:{pagas:st.pagas, extra:r2(ex), meses:[...st.meses].sort((a,b) => a - b), para:st.para}};
       closeSheet(); guardar(() => store.setCfg(nuevo), 'Guardado');
     });
   });
