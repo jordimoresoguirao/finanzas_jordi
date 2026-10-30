@@ -788,7 +788,7 @@ function normDoc(col, id, d){
   if (col==='obj'){ o.meta = Number(o.meta)||0; o.manual = Number(o.manual)||0; }
   if (col==='rec') o.dia = Number(o.dia)||1;
   if (col==='plan') o.cuotas = Number(o.cuotas)||1;
-  if (col==='stby'){ o.coste = Number(o.coste)||0; o.especie = Number(o.especie)||0; o.irpf = Number(o.irpf)||0; o.cobrar = Number(o.cobrar)||0; o.cobrado = !!o.cobrado; o.persona = String(o.persona || ''); if (!o.fecha) o.fecha = hoyISO(); }
+  if (col==='stby'){ o.coste = Number(o.coste)||0; o.especie = Number(o.especie)||0; o.irpf = Number(o.irpf)||0; o.cobrar = Number(o.cobrar)||0; o.apartado = Number(o.apartado)||0; o.hucha = o.hucha || null; o.irpfOk = !!o.irpfOk; o.cobrado = !!o.cobrado; o.persona = String(o.persona || ''); if (!o.fecha) o.fecha = hoyISO(); }
   if (col==='mov' && !o.fecha) o.fecha = hoyISO();
   return o;
 }
@@ -1016,7 +1016,7 @@ function proximos(hoy, dias = 35){
 function vInicio(){
   if (!S.cfg) return (S.def.cfg || S.mode !== 'db') ? (S.mode === 'cargando' ? vCargando() : vBienvenida()) : vCargando();
   const hoy = hoyISO();
-  return vTop(`${saludo()}, ${esc(S.cfg.nombre)}`, {sub:fechaLarga(hoy), greet:true, acts:btnAjustes()}) + banner() + vHero(hoy) + vNomina(hoy) + vStbyMini() + vAvisos(hoy) + vUltimos() + vProximos(hoy);
+  return vTop(`${saludo()}, ${esc(S.cfg.nombre)}`, {sub:fechaLarga(hoy), greet:true, acts:btnAjustes()}) + banner() + vHero(hoy) + vNomina(hoy) + vStbyIrpf() + vStbyMini() + vAvisos(hoy) + vUltimos() + vProximos(hoy);
 }
 function vCargando(){ return vTop('Hola, Jordi', {sub:fechaLarga(hoyISO()), greet:true}) + `<section class="hero" aria-busy="true"><p class="hero-cap">Abriendo tus cuentas…</p><div class="hero-skel"></div></section>`; }
 function vBienvenida(){
@@ -1093,6 +1093,24 @@ function vStbyMini(){
   const p = stbyPend(), v = r2(p.reduce((a,t) => a + t.cobrar, 0));
   const sub = p.length ? `Te deben ${eur(v)}` : (S.stby.length ? 'Nadie te debe nada' : 'Billetes que sacas a otros');
   return `<section class="card" style="padding:10px 14px 10px 20px"><div class="stbyq"><button class="row" data-act="stby"><span class="ico tr">${ic('ticket')}</span><span class="r-main"><span class="r-t">STBY</span><span class="r-s">${sub}</span></span></button><button class="btn small primary" data-act="new-stby">+ Billete</button></div></section>`;
+}
+
+/* Cuando cobras la nómina en la que te quitan el IRPF del STBY, propone recuperarlo de la hucha donde lo apartaste */
+function irpfPendiente(){
+  const cobradas = new Set(S.movs.filter(m => m.tipo === 'ingreso' && m.cat === 'nomina').map(m => ymOf(m.fecha)));
+  return S.stby.filter(t => !t.irpfOk && t.cobrado && t.hucha && t.apartado > 0 && retStby(t) > 0 && t.mesNomina && cobradas.has(t.mesNomina));
+}
+const devolverIrpf = t => r2(Math.min(retStby(t), t.apartado));
+function vStbyIrpf(){
+  const ts = irpfPendiente(); if (!ts.length) return '';
+  const v = r2(ts.reduce((a,t) => a + devolverIrpf(t), 0)), huchas = [...new Set(ts.map(t => ctaNombre(t.hucha)))].join(' y '), dest = ctaNombre(S.cfg.cuentaPrincipal), ids = ts.map(t => esc(t.id)).join(',');
+  return `<section class="card nudge"><div style="display:grid;gap:6px"><h2 class="big">Recupera el IRPF del STBY</h2><p class="muted">En la nómina que has cobrado te han quitado ${eur(v)} de IRPF por ${ts.length === 1 ? `el billete de ${esc(ts[0].persona)}` : `${ts.length} billetes de STBY`}. Lo tienes apartado en ${esc(huchas)}: pásalo a ${esc(dest)}.</p></div><div class="recbtns"><button class="btn primary" data-act="irpf-si" data-ids="${ids}">Pasar ${eur(v)} a ${esc(dest)}</button><button class="btn ghost" data-act="irpf-no" data-ids="${ids}">Ya lo he hecho</button></div></section>`;
+}
+async function cerrarIrpf(ids, mover){
+  const ts = S.stby.filter(t => ids.includes(t.id)), dest = S.cfg.cuentaPrincipal, now = new Date().toISOString(), v = r2(ts.reduce((a,t) => a + devolverIrpf(t), 0));
+  await guardar(async () => { for (const t of ts){
+    if (mover) await store.set('mov', 'stby-i-' + t.id, {fecha:hoyISO(), tipo:'traspaso', importe:devolverIrpf(t), cat:null, cuenta:null, desde:t.hucha, hacia:dest, rec:null, mes:null, stby:t.id, detalle:`STBY · IRPF · ${t.persona}`, creado:now});
+    await store.set('stby', t.id, {...strip(t), irpfOk:true}); } }, mover ? `Pasados ${eur(v)} a ${ctaNombre(dest)}` : 'Hecho');
 }
 
 /* ----- Movimientos ----- */
@@ -1453,18 +1471,18 @@ function vStby(){
   const nb = n => `${n} ${n === 1 ? 'billete' : 'billetes'}`;
   const tile = (k, v, s, vc = '') => `<div class="tile"><p class="t-k">${k}</p><p class="t-v ${vc}">${v}</p>${s ? `<p class="t-s">${s}</p>` : ''}</div>`;
   const dif = t => { const d = r2(t.cobrar - costeStby(t)); return Math.abs(d) < .005 ? '' : ` <span class="pill ${d > 0 ? 'ingreso' : 'ahorro'}">${d > 0 ? '+' : '−'}${eur(Math.abs(d))}</span>`; };
-  const row = t => `<div class="srow2"><button class="mrow" data-act="edit-stby" data-id="${esc(t.id)}"><span class="mmain"><span class="mtitle">${esc(t.persona || 'Sin nombre')}${t.detalle ? ` · ${esc(t.detalle)}` : ''}</span><span class="mmeta">${cap(fechaCorta(t.fecha))} <span class="pill">${t.pago === 'nomina' ? `nómina de ${mesNombre(t.mesNomina || ymOf(t.fecha))}` : 'tarjeta'}</span> te cuesta ${eur(costeStby(t))}${dif(t)}${t.cobrado && t.fechaCobro ? ` · cobrado el ${fechaCorta(t.fechaCobro)}` : ''}</span></span><span class="mamt">${eur(t.cobrar)}</span></button>${t.cobrado ? '' : `<button class="btn small ghost" data-act="cobrar-stby" data-ids="${esc(t.id)}">Cobrado</button>`}</div>`;
+  const row = t => `<div class="srow2"><button class="mrow" data-act="edit-stby" data-id="${esc(t.id)}"><span class="mmain"><span class="mtitle">${esc(t.persona || 'Sin nombre')}${t.detalle ? ` · ${esc(t.detalle)}` : ''}</span><span class="mmeta">${cap(fechaCorta(t.fecha))} <span class="pill">${t.pago === 'nomina' ? `nómina de ${mesNombre(t.mesNomina || ymOf(t.fecha))}` : 'tarjeta'}</span> te cuesta ${eur(costeStby(t))}${dif(t)}${t.cobrado && t.fechaCobro ? ` · cobrado el ${fechaCorta(t.fechaCobro)}` : ''}${t.apartado > 0 && t.hucha ? ` · ${eur(t.apartado)} a ${esc(ctaNombre(t.hucha))}` : ''}</span></span><span class="mamt">${eur(t.cobrar)}</span></button>${t.cobrado ? '' : `<button class="btn small ghost" data-act="cobrar-stby" data-ids="${esc(t.id)}">Cobrado</button>`}</div>`;
   const meses = Object.keys(nom).sort().reverse().slice(0, 6), nc = nom[cur];
   const quien = Object.values(per).sort((a,b) => b.v - a.v);
   return vTop('STBY', {back:true, sub:'Billetes que sacas a otros'}) + banner() +
    `<div class="tiles">${tile('Te deben', eur(debe), pend.length ? `${nb(pend.length)} sin cobrar` : 'Nada pendiente')}
      ${tile('Cobrado este mes', eur(cobMes), cap(mesNombre(cur)))}
-     ${tile(`Descuento en la nómina de ${mesNombre(cur)}`, eur(nc ? -nc.v : 0), nc ? nb(nc.n) : 'Ningún billete', nc ? 'neg' : '')}
+     ${tile(`IRPF del STBY en la nómina de ${mesNombre(cur)}`, eur(nc ? -nc.v : 0), nc ? nb(nc.n) : 'Ningún billete', nc ? 'neg' : '')}
      ${tile('Margen total', eur(margen, {signo:true}), 'Lo que cobras de más o de menos', margen < 0 ? 'neg' : margen > 0 ? 'pos' : '')}</div>
    <button class="btn primary wide" data-act="new-stby">+ Apuntar un billete</button>
    ${quien.length ? `<section class="card"><h2>Quién te debe</h2><div>${quien.map(x => `<div class="srow2"><span class="lrow-main" style="padding:12px 0"><span class="lrow-t">${esc(x.n)}</span><span class="lrow-s">${nb(x.ids.length)} · ${eur(x.v)}</span></span><button class="btn small ${x.ids.length > 1 ? 'primary' : 'ghost'}" data-act="cobrar-stby" data-ids="${x.ids.map(esc).join(',')}">${x.ids.length > 1 ? 'Cobrar todo' : 'Cobrado'}</button></div>`).join('')}</div></section>` : ''}
    <section class="card"><h2>Sin cobrar</h2>${pend.length ? `<div class="mlist">${pend.map(row).join('')}</div>` : `<p class="muted">${S.stby.length ? 'Todo cobrado.' : 'Cuando saques un billete para alguien, apúntalo aquí con lo que te cuesta y lo que le cobras. Cuando te pague, toca «Cobrado».'}</p>`}</section>
-   ${meses.length ? `<section class="card"><div style="display:grid;gap:4px"><h2>Descuentos en tu nómina</h2><p class="muted">Los billetes que pagas por nómina y el IRPF de los pagos en especie.</p></div><div>${meses.map(ym => `<div class="lrow"><span class="lrow-main"><span class="lrow-t">${cap(mesAnyo(ym))}</span><span class="lrow-s">${nb(nom[ym].n)}</span></span><span class="lrow-v neg">${eur(-nom[ym].v)}</span></div>`).join('')}</div></section>` : ''}
+   ${meses.length ? `<section class="card"><div style="display:grid;gap:4px"><h2>IRPF en tus nóminas</h2><p class="muted">Lo que te quitan en cada nómina por los pagos en especie.</p></div><div>${meses.map(ym => `<div class="lrow"><span class="lrow-main"><span class="lrow-t">${cap(mesAnyo(ym))}</span><span class="lrow-s">${nb(nom[ym].n)}</span></span><span class="lrow-v neg">${eur(-nom[ym].v)}</span></div>`).join('')}</div></section>` : ''}
    ${cob.length ? `<details class="card"><summary><span class="sumt"><b>Cobrados</b><small>${nb(cob.length)}</small></span><span class="chev" aria-hidden="true">›</span></summary><div class="mlist">${cob.slice(0, 40).map(row).join('')}</div></details>` : ''}`;
 }
 const VIEWS = {inicio:vInicio, resumen:vInicio, movimientos:vMovimientos, patrimonio:vPatrimonio, analisis:vAnalisis, proyeccion:vAnalisis, ajustes:vAjustes, mas:vAjustes, stby:vStby};
@@ -1863,10 +1881,33 @@ async function syncStbyMovs(id, d){
   else await store.del('mov', idP);
   if (d.cobrado && d.cobrar > 0 && d.cuentaCobro) await store.set('mov', idC, {...base, fecha:d.fechaCobro || hoyISO(), tipo:'ingreso', importe:d.cobrar, cat:'stby', cuenta:d.cuentaCobro, creado:S.movs.find(m => m.id === idC)?.creado || now});
   else await store.del('mov', idC);
+  /* Lo que sobra del cobro, de la cuenta donde te pagan a la hucha */
+  const idH = 'stby-h-' + id;
+  if (d.cobrado && d.apartado > 0 && d.hucha && d.cuentaCobro && d.hucha !== d.cuentaCobro) await store.set('mov', idH, {...base, fecha:d.fechaCobro || hoyISO(), tipo:'traspaso', importe:d.apartado, cat:null, cuenta:null, desde:d.cuentaCobro, hacia:d.hucha, detalle:`${det} · a la hucha`, creado:S.movs.find(m => m.id === idH)?.creado || now});
+  else await store.del('mov', idH);
 }
+/* Pagas los billetes con tarjeta y te pagan por Bizum en esa misma cuenta: se propone la última que usaste */
+const ultimaCuentaPago = () => [...S.stby].filter(x => x.cuentaPago).sort((a,b) => (b.fecha || '') > (a.fecha || '') ? 1 : -1)[0]?.cuentaPago || S.cfg.sobre?.cuenta || S.cfg.cuentaPrincipal;
+const cuentaCobroStby = t => { const c = t?.cuentaCobro && S.cuentas.find(x => x.id === t.cuentaCobro); return c && c.tipo !== 'hucha' ? c.id : (t?.cuentaPago || ultimaCuentaPago()); };
+/* Hucha para lo que sobra: la de este billete, la última que usaste, la que se llame «standby» o la primera */
+const huchasStby = () => ordenCuentas().filter(c => c.tipo === 'hucha');
+function huchaStby(t){
+  const hs = huchasStby(); if (!hs.length) return null; const ok = new Set(hs.map(c => c.id));
+  const ult = [...S.stby].filter(x => x.hucha && ok.has(x.hucha)).sort((a,b) => (b.fechaCobro || '') > (a.fechaCobro || '') ? 1 : -1)[0]?.hucha;
+  return (t?.hucha && ok.has(t.hucha) ? t.hucha : null) || ult || hs.find(c => /stby|standby/i.test(c.nombre))?.id || hs[0].id;
+}
+/* Lo que sobra al cobrar: lo que te pagan menos lo que te costó el billete (de ahí sale el IRPF que te quitarán en la nómina) */
+const sobraStby = t => r2(Math.max(t.cobrar - t.coste, 0));
+function notaCobro(ts, apa){
+  const coste = r2(ts.reduce((a,t) => a + t.coste, 0)), ret = r2(ts.reduce((a,t) => a + retStby(t), 0)), gana = r2(ts.reduce((a,t) => a + t.cobrar - costeStby(t), 0));
+  const meses = [...new Set(ts.filter(t => retStby(t) > 0 && t.mesNomina).map(t => mesNombre(t.mesNomina)))];
+  return `Recuperas los ${eur(coste)} del billete${apa > 0 ? ` y apartas ${eur(apa)}` : ''}. ${ret > 0 ? `${eur(ret)} son el IRPF del pago en especie: te los quitarán en la nómina que cobres en ${meses.join(' y ') || 'su mes'}${apa > 0 ? ', y entonces te propondré recuperarlos de la hucha' : ''}. ` : ''}Lo que ganas de verdad: ${eur(gana, {signo:true})}.`;
+}
+const apartarHTML = (on, imp, soloLectura) => huchasStby().length ? `<label class="check"><input type="checkbox" id="apOn" ${on ? 'checked' : ''}><span>Apartar lo que sobra en una hucha</span></label>
+    <div class="grid2" id="apW"><div class="fld"><label for="apHuc">Hucha</label><select id="apHuc">${huchasStby().map(c => `<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('')}</select></div><div class="fld"><label for="apImp">Importe</label><div class="amount sm"><input id="apImp" inputmode="decimal" value="${imp > 0 ? fmtIn(imp) : ''}" placeholder="0" ${soloLectura ? 'readonly' : ''}><span>€</span></div></div></div>` : '';
 const ultimaCuentaCobro = () => [...S.stby].filter(x => x.cuentaCobro).sort((a,b) => (b.fechaCobro || '') > (a.fechaCobro || '') ? 1 : -1)[0]?.cuentaCobro;
 function sheetStby(t){
-  const edit = !!t, st = {pago: t?.pago || 'nomina', cobTocado: edit}, irpf = Number(S.cfg.sueldo?.irpf) || 0;
+  const edit = !!t, st = {cobTocado: edit, apTocado: !!(t?.cobrado && t.apartar !== undefined)}, irpf = Number(S.cfg.sueldo?.irpf) || 0;
   const personas = [...new Set(S.stby.map(x => (x.persona || '').trim()).filter(Boolean))].sort((a,b) => a.localeCompare(b));
   openSheet(edit ? 'Editar billete' : 'Nuevo billete STBY', `<form id="fStby" class="form" novalidate>
     <div class="fld"><label for="bPer">¿Para quién?</label><input id="bPer" autocomplete="off" list="bPerL" placeholder="Ej: Marta" value="${esc(t?.persona || '')}"><datalist id="bPerL">${personas.map(p => `<option value="${esc(p)}"></option>`).join('')}</datalist></div>
@@ -1876,14 +1917,15 @@ function sheetStby(t){
     <div class="fld"><label for="bCobrar">Le cobras</label><div class="amount sm"><input id="bCobrar" inputmode="decimal" placeholder="0" value="${t ? fmtIn(t.cobrar) : ''}"><span>€</span></div></div>
     <p class="note" id="bDif"></p>
     <div class="fld"><label for="bFecha">Cuándo lo sacaste</label><input type="date" id="bFecha" value="${esc(t?.fecha || hoyISO())}"></div>
-    <div class="fld"><span class="lbl">¿Cómo lo pagas tú?</span><div class="seg" id="bPago" role="group" aria-label="Cómo lo pagas"><button type="button" data-p="nomina">Descuento en nómina</button><button type="button" data-p="tarjeta">Tarjeta o cuenta</button></div></div>
-    <div class="fld" id="bMesW"><label for="bMes">Te lo descuentan en la nómina de</label><input type="month" id="bMes" value="${esc(t?.mesNomina || ymOf(t?.fecha || hoyISO()))}" placeholder="${ymOf(hoyISO())}"></div>
+    <div class="fld" id="bMesW"><label for="bMes">El IRPF del especie te lo quitan en la nómina que cobras en</label><input type="month" id="bMes" value="${esc(t?.mesNomina || addMonths(ymOf(t?.fecha || hoyISO()), 1))}" placeholder="${addMonths(ymOf(hoyISO()), 1)}"></div>
     <div class="fld" id="bCtaW"><label for="bCta">Pagado desde</label><select id="bCta">${optsCuentas()}</select><span class="note">Se anota solo como gasto de STBY en esa cuenta. No cuenta en el sobre.</span></div>
     <label class="check"><input type="checkbox" id="bCob" ${t?.cobrado ? 'checked' : ''}><span>Ya me lo ha pagado</span></label>
-    <div id="bCobW" class="form" style="gap:12px"><div class="fld"><label for="bCobCta">Dónde lo has recibido</label><select id="bCobCta">${optsCuentas()}</select></div><div class="fld"><label for="bCobF">Cuándo</label><input type="date" id="bCobF" value="${esc(t?.fechaCobro || hoyISO())}"></div><p class="note">Se anota solo como ingreso de STBY en esa cuenta. No cuenta en el sobre.</p></div>
+    <div id="bCobW" class="form" style="gap:12px"><div class="fld"><label for="bCobCta">Dónde lo has recibido</label><select id="bCobCta">${optsCuentas()}</select></div><div class="fld"><label for="bCobF">Cuándo</label><input type="date" id="bCobF" value="${esc(t?.fechaCobro || hoyISO())}"></div>
+      ${apartarHTML(t?.apartar !== false, t?.cobrado && t.apartar !== undefined ? t.apartado : 0, false)}
+      <p class="note" id="apNota"></p><p class="note">Se anota solo en esas cuentas. No cuenta en el sobre.</p></div>
     ${actions(edit)}${edit ? '<button type="button" class="btn danger" id="bDel">Eliminar billete</button>' : ''}</form>`, root => {
     const q = x => root.querySelector(x);
-    setSel(q('#bCta'), t?.cuentaPago || S.cfg.cuentaPrincipal); setSel(q('#bCobCta'), t?.cuentaCobro || ultimaCuentaCobro() || S.cfg.cuentaPrincipal);
+    setSel(q('#bCta'), t?.cuentaPago || ultimaCuentaPago()); setSel(q('#bCobCta'), cuentaCobroStby(t)); if (q('#apHuc')) setSel(q('#apHuc'), huchaStby(t));
     const num = id => { const v = q(id).value.trim(); return v ? parseImporte(v) : 0; };
     const total = () => { const c = num('#bCoste'), e = num('#bEsp'); return c >= 0 && e >= 0 ? r2(c + e*irpf/100) : NaN; };
     const calc = () => { const c = num('#bCoste'), e = num('#bEsp'), box = q('#bCalc'); box.hidden = !(e > 0 && c >= 0); if (box.hidden) return;
@@ -1892,13 +1934,17 @@ function sheetStby(t){
     const dif = () => { const c = total(), v = q('#bCobrar').value.trim() ? parseImporte(q('#bCobrar').value) : NaN, n = q('#bDif'); n.className = 'note';
       if (!q('#bCoste').value.trim() && !q('#bEsp').value.trim() || !(c >= 0) || !(v >= 0)){ n.textContent = ''; return; } const d = r2(v - c);
       n.textContent = Math.abs(d) < .005 ? 'Le cobras lo mismo que te cuesta.' : d > 0 ? `Le cobras ${eur(d)} más de lo que te cuesta.` : `Le cobras ${eur(-d)} menos de lo que te cuesta.`; if (d < 0) n.classList.add('warn'); };
-    const sync = () => { q('#bPago').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.p === st.pago))); q('#bMesW').hidden = !(st.pago === 'nomina' || num('#bEsp') > 0); q('#bCtaW').hidden = st.pago !== 'tarjeta'; q('#bCobW').hidden = !q('#bCob').checked; calc(); dif(); };
-    q('#bPago').addEventListener('click', e => { const b = e.target.closest('button'); if (b){ st.pago = b.dataset.p; sync(); } });
+    /* Lo que sobra se propone solo (lo que te paga menos el billete) mientras no lo cambies */
+    const apartar = () => { if (!q('#apOn')) return; const on = q('#apOn').checked, cobra = q('#bCobrar').value.trim() ? parseImporte(q('#bCobrar').value) : total();
+      q('#apW').hidden = !on; if (!st.apTocado) q('#apImp').value = fmtIn(Math.max(r2(cobra - num('#bCoste')), 0));
+      const ap = on ? num('#apImp') : 0; q('#apNota').textContent = cobra >= 0 ? notaCobro([{coste:num('#bCoste'), cobrar:cobra, especie:num('#bEsp'), irpf, mesNomina:q('#bMes').value}], ap > 0 ? ap : 0) : ''; };
+    const sync = () => { q('#bMesW').hidden = !(num('#bEsp') > 0); q('#bCobW').hidden = !q('#bCob').checked; calc(); dif(); apartar(); };
+    q('#apOn')?.addEventListener('change', sync); q('#apImp')?.addEventListener('input', () => { st.apTocado = true; apartar(); }); q('#bMes').addEventListener('change', apartar);
     q('#bCob').addEventListener('change', sync);
     /* Mientras no toques «Le cobras», propone el coste total */
     const alCambiar = () => { if (!st.cobTocado){ const tot = total(); q('#bCobrar').value = tot > 0 ? fmtIn(tot) : ''; } sync(); };
     q('#bCoste').addEventListener('input', alCambiar); q('#bEsp').addEventListener('input', alCambiar);
-    q('#bCobrar').addEventListener('input', () => { st.cobTocado = true; dif(); });
+    q('#bCobrar').addEventListener('input', () => { st.cobTocado = true; dif(); apartar(); });
     sync();
     if (!edit) setTimeout(() => q('#bPer')?.focus(), 80);
     q('#fStby').addEventListener('submit', e => {
@@ -1908,13 +1954,16 @@ function sheetStby(t){
       if (!per){ err.textContent = 'Pon para quién es el billete.'; q('#bPer').focus(); return; }
       if (!(coste >= 0) || !(especie >= 0) || !(cobrar >= 0)){ err.textContent = 'Revisa los importes: tienen que ser números.'; return; }
       if (!(coste > 0) && !(cobrar > 0)){ err.textContent = 'Pon lo que te cuesta y lo que le cobras.'; q('#bCoste').focus(); return; }
-      if ((st.pago === 'nomina' || especie > 0) && !isYM(mes)){ err.textContent = 'Escribe el mes de la nómina como 2026-11.'; return; }
+      if (especie > 0 && !isYM(mes)){ err.textContent = 'Escribe el mes de la nómina como 2026-11.'; return; }
+      const ap = cob && q('#apOn')?.checked, apImp = ap ? num('#apImp') : 0;
+      if (!(apImp >= 0)){ err.textContent = 'Lo que apartas tiene que ser un número.'; return; }
       const id = t?.id || uid('s');
-      const doc = {persona:per, detalle:q('#bDet').value.trim(), fecha, coste:r2(coste), especie:r2(especie), irpf: especie > 0 ? irpf : 0, cobrar:r2(cobrar), pago:st.pago, mesNomina: st.pago === 'nomina' || especie > 0 ? mes : null, cuentaPago: st.pago === 'tarjeta' ? q('#bCta').value : null,
-        cobrado:cob, fechaCobro: cob ? (q('#bCobF').value || hoyISO()) : null, cuentaCobro: cob ? q('#bCobCta').value : null, creado:t?.creado || new Date().toISOString()};
+      const doc = {persona:per, detalle:q('#bDet').value.trim(), fecha, coste:r2(coste), especie:r2(especie), irpf: especie > 0 ? irpf : 0, cobrar:r2(cobrar), pago:'tarjeta', mesNomina: especie > 0 ? mes : null, cuentaPago:q('#bCta').value,
+        cobrado:cob, fechaCobro: cob ? (q('#bCobF').value || hoyISO()) : null, cuentaCobro: cob ? q('#bCobCta').value : null,
+        apartar: cob ? !!ap : t?.apartar, hucha: ap && apImp > 0 ? q('#apHuc').value : null, apartado: ap ? r2(apImp) : 0, irpfOk: !!t?.irpfOk, creado:t?.creado || new Date().toISOString()};
       closeSheet(); guardar(async () => { await store.set('stby', id, doc); await syncStbyMovs(id, doc); }, edit ? 'Billete guardado' : `Apuntado: ${per}, ${eur(cobrar)}`);
     });
-    const del = q('#bDel'); if (del) armar(del, 'Toca otra vez para eliminar', () => { closeSheet(); guardar(async () => { await store.del('stby', t.id); await store.del('mov', 'stby-c-' + t.id); await store.del('mov', 'stby-p-' + t.id); }, 'Billete eliminado'); });
+    const del = q('#bDel'); if (del) armar(del, 'Toca otra vez para eliminar', () => { closeSheet(); guardar(async () => { await store.del('stby', t.id); for (const k of ['c', 'p', 'h', 'i']) await store.del('mov', `stby-${k}-${t.id}`); }, 'Billete eliminado'); });
   });
 }
 function sheetCobro(ids){
@@ -1924,11 +1973,17 @@ function sheetCobro(ids){
     <p class="lead">${ts.length > 1 ? `${ts.length} billetes · ` : `${esc(ts[0].persona)}${ts[0].detalle ? ` · ${esc(ts[0].detalle)}` : ''} · `}<b>${eur(tot)}</b></p>
     <div class="fld"><label for="cbCta">Dónde lo has recibido</label><select id="cbCta">${optsCuentas()}</select></div>
     <div class="fld"><label for="cbF">Cuándo</label><input type="date" id="cbF" value="${hoyISO()}"></div>
-    <p class="note">Se anota solo como ingreso de STBY en esa cuenta. No cuenta en el sobre.</p>
+    ${apartarHTML(true, r2(ts.reduce((a,t) => a + sobraStby(t), 0)), ts.length > 1)}
+    <p class="note" id="apNota"></p><p class="note">Se anota solo en esas cuentas. No cuenta en el sobre.</p>
     ${actions(false, 'Marcar como cobrado')}</form>`, root => {
-    const q = x => root.querySelector(x); setSel(q('#cbCta'), ultimaCuentaCobro() || S.cfg.cuentaPrincipal);
-    q('#fCobro').addEventListener('submit', e => { e.preventDefault(); const cta = q('#cbCta').value, f = q('#cbF').value || hoyISO(); closeSheet();
-      guardar(async () => { for (const t of ts){ const d = {...strip(t), cobrado:true, fechaCobro:f, cuentaCobro:cta}; await store.set('stby', t.id, d); await syncStbyMovs(t.id, d); } }, `Cobrado: ${eur(tot)}`); });
+    const q = x => root.querySelector(x), uno = ts.length === 1; setSel(q('#cbCta'), cuentaCobroStby(ts[0])); if (q('#apHuc')) setSel(q('#apHuc'), huchaStby(ts[0]));
+    const imp = () => { const v = q('#apImp')?.value.trim(); return v ? parseImporte(v) : 0; };
+    const nota = () => { const on = !!q('#apOn')?.checked; if (q('#apW')) q('#apW').hidden = !on; q('#apNota').textContent = notaCobro(ts, on ? imp() : 0); };
+    q('#apOn')?.addEventListener('change', nota); q('#apImp')?.addEventListener('input', nota); nota();
+    q('#fCobro').addEventListener('submit', e => { e.preventDefault(); const cta = q('#cbCta').value, f = q('#cbF').value || hoyISO(), on = !!q('#apOn')?.checked, h = q('#apHuc')?.value || null;
+      const v = imp(); if (on && !(v >= 0)){ q('.err').textContent = 'Lo que apartas tiene que ser un número.'; return; }
+      closeSheet();
+      guardar(async () => { for (const t of ts){ const ap = on ? (uno ? r2(v) : sobraStby(t)) : 0; const d = {...strip(t), cobrado:true, fechaCobro:f, cuentaCobro:cta, apartar:on, hucha: ap > 0 ? h : null, apartado:ap}; await store.set('stby', t.id, d); await syncStbyMovs(t.id, d); } }, `Cobrado: ${eur(tot)}`); });
   });
 }
 
@@ -2414,6 +2469,7 @@ const ACT = {
   'new-stby': () => S.cfg ? sheetStby() : sheetSetup(),
   'edit-stby': b => { const t = S.stby.find(x => x.id === b.dataset.id); if (t) sheetStby(t); },
   'cobrar-stby': b => sheetCobro(String(b.dataset.ids || '').split(',')),
+  'irpf-si': b => cerrarIrpf(String(b.dataset.ids || '').split(','), true), 'irpf-no': b => cerrarIrpf(String(b.dataset.ids || '').split(','), false),
   setup: () => sheetSetup(),
   'sheet-sobre': () => sheetSobre(), 'sheet-sueldo': () => sheetSueldo(), 'sheet-cats': () => sheetCats(),
   'new-rec': b => sheetRec(null, b.dataset.t), 'edit-rec': b => { const r = S.recs.find(x => x.id === b.dataset.id); if (r) sheetRec(r); },
