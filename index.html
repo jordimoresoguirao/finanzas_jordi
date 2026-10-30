@@ -662,7 +662,7 @@ function simularAmortizacion(C, r, cuota, X, comPct){
 function habitualMes(ym, ctx, f = 1){
   const {recs, plans, cfg} = ctx, est = ctx.estVar || {}, huchas = ctx.huchas; let ing = 0, gFijo = 0, gVar = 0;
   for (const rc of recs){ if (!recActiva(rc, ym)) continue;
-    if (rc.tipo==='ingreso') ing += (rc.variable && est[rc.id] != null) ? est[rc.id] : rc.importe;
+    if (rc.tipo==='ingreso'){ const real = rc.variable && ctx.realIng ? ctx.realIng(rc, ym) : 0; ing += real > 0 ? real : (rc.variable && est[rc.id] != null) ? est[rc.id] : rc.importe; }
     else if (rc.tipo==='gasto'){
       if (rc.deuda){ const df = ctx.deudas && ctx.deudas[rc.deuda];
         gFijo += !df ? rc.importe : (df.pagado || (df.fin && ym > df.fin)) ? 0 : (ym === df.fin ? df.ultima : rc.importe); }
@@ -766,7 +766,7 @@ function estNomina(rc){
 }
 /* Fin previsto de cada préstamo, para que la proyección deje de contar la cuota cuando se acaba */
 const deudasCtx = () => { const hoy = hoyISO(), o = {}; for (const d of S.deudas){ const e = estadoDeuda(d, S.movs, hoy); o[d.id] = {fin:e.finYm, ultima:e.ultima, pagado:!(e.pendiente > 0.005)}; } return o; };
-const ctx = () => ({recs:S.recs, plans:S.plans, cfg:S.cfg, deudas:deudasCtx(), estVar:Object.fromEntries(S.recs.filter(r => r.variable && r.tipo === 'ingreso').map(r => [r.id, estNomina(r).v])), huchas:huchasGasto()});
+const ctx = () => ({recs:S.recs, plans:S.plans, cfg:S.cfg, deudas:deudasCtx(), realIng:(rc, ym) => rc.cat ? r2(S.movs.reduce((a,m) => a + (m.tipo === 'ingreso' && m.cat === rc.cat && mesDe(m) === ym ? m.importe : 0), 0)) : 0, estVar:Object.fromEntries(S.recs.filter(r => r.variable && r.tipo === 'ingreso').map(r => [r.id, estNomina(r).v])), huchas:huchasGasto()});
 const saldo = c => saldoCuenta(c, S.movs, S.cfg?.sobre, hoyISO());
 const ordenCuentas = () => [...S.cuentas].sort((a,b) => (ORD[a.tipo]??9) - (ORD[b.tipo]??9) || (a.orden||0) - (b.orden||0) || a.nombre.localeCompare(b.nombre));
 const primerMes = () => S.movs.reduce((a,m) => { const y = ymOf(m.fecha); return !a || y < a ? y : a; }, null);
@@ -788,7 +788,7 @@ function normDoc(col, id, d){
   if (col==='obj'){ o.meta = Number(o.meta)||0; o.manual = Number(o.manual)||0; }
   if (col==='rec') o.dia = Number(o.dia)||1;
   if (col==='plan') o.cuotas = Number(o.cuotas)||1;
-  if (col==='stby'){ o.coste = Number(o.coste)||0; o.cobrar = Number(o.cobrar)||0; o.cobrado = !!o.cobrado; o.persona = String(o.persona || ''); if (!o.fecha) o.fecha = hoyISO(); }
+  if (col==='stby'){ o.coste = Number(o.coste)||0; o.especie = Number(o.especie)||0; o.irpf = Number(o.irpf)||0; o.cobrar = Number(o.cobrar)||0; o.cobrado = !!o.cobrado; o.persona = String(o.persona || ''); if (!o.fecha) o.fecha = hoyISO(); }
   if (col==='mov' && !o.fecha) o.fecha = hoyISO();
   return o;
 }
@@ -796,7 +796,8 @@ function normCfg(d){
   const c = JSON.parse(JSON.stringify(d||{}));
   c.categorias = Array.isArray(c.categorias) && c.categorias.length ? c.categorias.map(x => ({...x, presupuesto:Number(x.presupuesto)||0, palabras:Array.isArray(x.palabras) ? x.palabras : []})) : CATS_DEF.map(x => ({...x, presupuesto:0}));
   c.sobre = {importe:0, dia:1, cuenta:'', origen:'', ...(c.sobre||{})}; c.sobre.importe = Number(c.sobre.importe)||0; c.sobre.dia = Number(c.sobre.dia); if (!(c.sobre.dia >= 0 && c.sobre.dia <= 6)) c.sobre.dia = 1;
-  c.sueldo = {pagas:12, extra:0, meses:[6,12], para:'siguiente', ...(c.sueldo||{})};
+  c.sueldo = {pagas:12, extra:0, meses:[6,12], para:'siguiente', irpf:22, ...(c.sueldo||{})};
+  c.sueldo.irpf = Number(c.sueldo.irpf); if (!(c.sueldo.irpf >= 0)) c.sueldo.irpf = 22;
   if (c.ipc == null) c.ipc = IPC_DEF;
   c.nombre = c.nombre || 'Jordi';
   return c;
@@ -1372,7 +1373,7 @@ function chartSVG(bars){
   return s + '</svg>';
 }
 function vFuturo(){
-  const {rows, hist} = proyeccion(S.ipc), cur = rows[0].ym;
+  const {rows, hist} = proyeccion(false), cur = rows[0].ym, conIpc = proyeccion(true).rows, menosIpc = r2(rows[rows.length - 1].acum - conIpc[conIpc.length - 1].acum);
   const bars = [...hist.map(h => ({ym:h.ym, v:h.neto, real:true})), ...rows.slice(0, 7).map((r,i) => ({ym:r.ym, v:r.neto, real:false, cur:i === 0}))];
   const sumHist = r2(hist.reduce((a,h) => a + h.neto, 0)), next6 = r2(rows.slice(1, 7).reduce((a,r) => a + r.neto, 0));
   const cell = (v, opt = {}) => v ? `<td class="${opt.cur ? 'cur' : ''} ${opt.neg && v < 0 ? 'neg' : ''}">${eur(v, {dec:0})}</td>` : `<td class="dim ${opt.cur ? 'cur' : ''}">—</td>`;
@@ -1384,8 +1385,7 @@ function vFuturo(){
     <div class="split"><p>${hist.length ? `Ahorrado ${MESES_C[Number(hist[0].ym.slice(5))-1]}–${MESES_C[Number(hist[hist.length-1].ym.slice(5))-1]}` : `Previsto en ${mesNombre(cur)}`}<b class="${(hist.length ? sumHist : rows[0].neto) < 0 ? 'neg' : ''}">${eur(hist.length ? sumHist : rows[0].neto, {dec:0})}</b></p><p>Próximos 6 meses<b class="${next6 < 0 ? 'neg' : ''}">${eur(next6, {dec:0})}</b></p></div>
     ${!S.recs.length ? `<p class="banner">Aún no tienes fijos. Añade la nómina y los gastos fijos para que la proyección tenga sentido.</p>` : ''}</section>
    <section class="card"><h2>Mes a mes</h2>
-    <div class="seg" role="group" aria-label="Inflación"><button data-act="ipc" data-v="0" aria-pressed="${!S.ipc}">Sin IPC</button><button data-act="ipc" data-v="1" aria-pressed="${S.ipc}">Con IPC</button></div>
-    <p class="muted">${S.ipc ? `Con IPC (${fmtIn(ipcAnual())} % anual, ${IPC_FUENTE}): el sobre y los gastos fijos suben cada mes; la nómina, la cuota del préstamo y los planificados no cambian.` : 'Sin IPC: todo se queda como hoy.'}</p>
+    <p class="muted">Con los precios de hoy.${menosIpc >= 1 ? ` Si los precios suben como el IPC (${fmtIn(ipcAnual())} % al año), el sobre y tus gastos fijos costarán algo más: en 12 meses ahorrarías unos ${eur(menosIpc, {dec:0})} menos.` : ''}</p>
     <div class="tscroll"><table class="ptable"><thead><tr><th scope="col"><span class="sr">Concepto</span></th>${rows.map(r => `<th scope="col">${cap(mesCorto(r.ym))}${r.actual ? '<small>en curso</small>' : ''}</th>`).join('')}</tr></thead><tbody>
       <tr><th scope="row">Ingresos previstos<small>nómina y pagas extra</small></th>${rows.map(r => cell(r.ing, {cur:r.actual})).join('')}</tr>
       <tr><th scope="row">+ Ingresos planificados</th>${rows.map(r => cell(r.plIng, {cur:r.actual})).join('')}</tr>
@@ -1397,7 +1397,7 @@ function vFuturo(){
       <tr><th scope="row">Acumulado</th>${rows.map(r => `<td class="${r.actual ? 'cur' : ''} ${r.acum < 0 ? 'neg' : ''}">${eur(r.acum, {dec:0})}</td>`).join('')}</tr>
     </tbody></table></div>
     <p class="muted">Desliza la tabla para ver los 12 meses.</p>${media}${notaNomina()}
-    <details class="how"><summary>Cómo se calcula</summary><p>Ingresos y gastos fijos salen de tus fijos de cada mes. Si tu nómina cambia cada mes, se usa la media de las últimas tres que hayas anotado. El sobre cuenta las recargas reales de cada mes: 4 o 5 según cuántos ${diaPl(S.cfg.sobre.dia)} tenga. Las pagas extra salen de Ajustes → Sueldo y pagas. La cuota del préstamo deja de contar cuando lo terminas. Lo que apartas en huchas para gastos cuenta como gasto previsto, porque lo vas a gastar. Lo que va a ahorro e inversión no es gasto: es parte del ahorro. El mes en curso se queda con lo que ya has anotado o con lo previsto, lo que sea mayor.</p></details></section>
+    <details class="how"><summary>Cómo se calcula</summary><p>Ingresos y gastos fijos salen de tus fijos de cada mes. Si tu nómina cambia cada mes, se usa la media de las últimas tres que hayas anotado; si la de un mes ya la has cobrado, se usa lo que cobraste. El sobre cuenta las recargas reales de cada mes: 4 o 5 según cuántos ${diaPl(S.cfg.sobre.dia)} tenga. Las pagas extra salen de Ajustes → Sueldo y pagas. La cuota del préstamo deja de contar cuando lo terminas. Lo que apartas en huchas para gastos cuenta como gasto previsto, porque lo vas a gastar. Lo que va a ahorro e inversión no es gasto: es parte del ahorro. El mes en curso se queda con lo que ya has anotado o con lo previsto, lo que sea mayor.</p></details></section>
    <section class="card"><div style="display:grid;gap:4px"><h2>Gastos e ingresos planificados</h2><p class="muted">Lo que ya sabes que viene: un viaje, regalos, una compra a plazos, un bono…</p></div>
     <div class="recbtns"><button class="btn small primary" data-act="new-plan" data-t="gasto">+ Gasto futuro</button><button class="btn small ghost" data-act="new-plan" data-t="ingreso">+ Ingreso futuro</button></div>
     ${plans.length ? `<div class="mlist">${plans.map(p => {
@@ -1434,21 +1434,26 @@ function vAjustes(){
 
 /* ----- STBY ----- */
 const stbyPend = () => S.stby.filter(t => !t.cobrado);
-const stbyNomina = ym => { const v = S.stby.reduce((a,t) => a + (t.pago === 'nomina' && (t.mesNomina || ymOf(t.fecha)) === ym ? t.coste : 0), 0); return v > 0 ? ` Este mes te descuentan unos ${eur(v)} de STBY.` : ''; };
+/* Lo que te cuesta de verdad un billete: el billete más el IRPF del pago en especie, que te retienen en la nómina */
+const retStby = t => r2((t.especie || 0) * (t.irpf || 0) / 100);
+const costeStby = t => r2(t.coste + retStby(t));
+/* Lo que te quitan de la nómina por un billete: el billete si va por nómina y, siempre, el IRPF del pago en especie */
+const enNominaStby = t => r2((t.pago === 'nomina' ? t.coste : 0) + retStby(t));
+const stbyNomina = ym => { const v = S.stby.reduce((a,t) => a + ((t.mesNomina || ymOf(t.fecha)) === ym ? enNominaStby(t) : 0), 0); return v > 0 ? ` Este mes te descuentan unos ${eur(v)} de STBY.` : ''; };
 const stbyResumenTxt = () => { const p = stbyPend(), v = p.reduce((a,t) => a + t.cobrar, 0); return p.length ? `${p.length} sin cobrar · te deben ${eur(v)}` : (S.stby.length ? 'Todo cobrado' : 'Billetes que sacas a otros'); };
 function vStby(){
   if (!S.cfg) return vSinCfg('STBY');
   const cur = ymOf(hoyISO());
   const pend = stbyPend().sort((a,b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
   const cob = S.stby.filter(t => t.cobrado).sort((a,b) => (a.fechaCobro || '') < (b.fechaCobro || '') ? 1 : -1);
-  const debe = r2(pend.reduce((a,t) => a + t.cobrar, 0)), margen = r2(S.stby.reduce((a,t) => a + t.cobrar - t.coste, 0));
+  const debe = r2(pend.reduce((a,t) => a + t.cobrar, 0)), margen = r2(S.stby.reduce((a,t) => a + t.cobrar - costeStby(t), 0));
   const cobMes = r2(cob.reduce((a,t) => a + (ymOf(t.fechaCobro || '0000-00') === cur ? t.cobrar : 0), 0));
-  const nom = {}; for (const t of S.stby){ if (t.pago !== 'nomina') continue; const ym = t.mesNomina || ymOf(t.fecha); (nom[ym] ||= {v:0, n:0}); nom[ym].v += t.coste; nom[ym].n++; }
+  const nom = {}; for (const t of S.stby){ const v = enNominaStby(t); if (!(v > 0)) continue; const ym = t.mesNomina || ymOf(t.fecha); (nom[ym] ||= {v:0, n:0}); nom[ym].v += v; nom[ym].n++; }
   const per = {}; for (const t of pend){ const k = t.persona.trim().toLowerCase(); (per[k] ||= {n:t.persona.trim() || 'Sin nombre', v:0, ids:[]}); per[k].v += t.cobrar; per[k].ids.push(t.id); }
   const nb = n => `${n} ${n === 1 ? 'billete' : 'billetes'}`;
   const tile = (k, v, s, vc = '') => `<div class="tile"><p class="t-k">${k}</p><p class="t-v ${vc}">${v}</p>${s ? `<p class="t-s">${s}</p>` : ''}</div>`;
-  const dif = t => { const d = r2(t.cobrar - t.coste); return Math.abs(d) < .005 ? '' : ` <span class="pill ${d > 0 ? 'ingreso' : 'ahorro'}">${d > 0 ? '+' : '−'}${eur(Math.abs(d))}</span>`; };
-  const row = t => `<div class="srow2"><button class="mrow" data-act="edit-stby" data-id="${esc(t.id)}"><span class="mmain"><span class="mtitle">${esc(t.persona || 'Sin nombre')}${t.detalle ? ` · ${esc(t.detalle)}` : ''}</span><span class="mmeta">${cap(fechaCorta(t.fecha))} <span class="pill">${t.pago === 'nomina' ? `nómina de ${mesNombre(t.mesNomina || ymOf(t.fecha))}` : 'tarjeta'}</span>${dif(t)}${t.cobrado && t.fechaCobro ? ` · cobrado el ${fechaCorta(t.fechaCobro)}` : ''}</span></span><span class="mamt">${eur(t.cobrar)}</span></button>${t.cobrado ? '' : `<button class="btn small ghost" data-act="cobrar-stby" data-ids="${esc(t.id)}">Cobrado</button>`}</div>`;
+  const dif = t => { const d = r2(t.cobrar - costeStby(t)); return Math.abs(d) < .005 ? '' : ` <span class="pill ${d > 0 ? 'ingreso' : 'ahorro'}">${d > 0 ? '+' : '−'}${eur(Math.abs(d))}</span>`; };
+  const row = t => `<div class="srow2"><button class="mrow" data-act="edit-stby" data-id="${esc(t.id)}"><span class="mmain"><span class="mtitle">${esc(t.persona || 'Sin nombre')}${t.detalle ? ` · ${esc(t.detalle)}` : ''}</span><span class="mmeta">${cap(fechaCorta(t.fecha))} <span class="pill">${t.pago === 'nomina' ? `nómina de ${mesNombre(t.mesNomina || ymOf(t.fecha))}` : 'tarjeta'}</span> te cuesta ${eur(costeStby(t))}${dif(t)}${t.cobrado && t.fechaCobro ? ` · cobrado el ${fechaCorta(t.fechaCobro)}` : ''}</span></span><span class="mamt">${eur(t.cobrar)}</span></button>${t.cobrado ? '' : `<button class="btn small ghost" data-act="cobrar-stby" data-ids="${esc(t.id)}">Cobrado</button>`}</div>`;
   const meses = Object.keys(nom).sort().reverse().slice(0, 6), nc = nom[cur];
   const quien = Object.values(per).sort((a,b) => b.v - a.v);
   return vTop('STBY', {back:true, sub:'Billetes que sacas a otros'}) + banner() +
@@ -1459,7 +1464,7 @@ function vStby(){
    <button class="btn primary wide" data-act="new-stby">+ Apuntar un billete</button>
    ${quien.length ? `<section class="card"><h2>Quién te debe</h2><div>${quien.map(x => `<div class="srow2"><span class="lrow-main" style="padding:12px 0"><span class="lrow-t">${esc(x.n)}</span><span class="lrow-s">${nb(x.ids.length)} · ${eur(x.v)}</span></span><button class="btn small ${x.ids.length > 1 ? 'primary' : 'ghost'}" data-act="cobrar-stby" data-ids="${x.ids.map(esc).join(',')}">${x.ids.length > 1 ? 'Cobrar todo' : 'Cobrado'}</button></div>`).join('')}</div></section>` : ''}
    <section class="card"><h2>Sin cobrar</h2>${pend.length ? `<div class="mlist">${pend.map(row).join('')}</div>` : `<p class="muted">${S.stby.length ? 'Todo cobrado.' : 'Cuando saques un billete para alguien, apúntalo aquí con lo que te cuesta y lo que le cobras. Cuando te pague, toca «Cobrado».'}</p>`}</section>
-   ${meses.length ? `<section class="card"><div style="display:grid;gap:4px"><h2>Descuentos en tu nómina</h2><p class="muted">Lo que te descuentan de STBY en cada nómina.</p></div><div>${meses.map(ym => `<div class="lrow"><span class="lrow-main"><span class="lrow-t">${cap(mesAnyo(ym))}</span><span class="lrow-s">${nb(nom[ym].n)}</span></span><span class="lrow-v neg">${eur(-nom[ym].v)}</span></div>`).join('')}</div></section>` : ''}
+   ${meses.length ? `<section class="card"><div style="display:grid;gap:4px"><h2>Descuentos en tu nómina</h2><p class="muted">Los billetes que pagas por nómina y el IRPF de los pagos en especie.</p></div><div>${meses.map(ym => `<div class="lrow"><span class="lrow-main"><span class="lrow-t">${cap(mesAnyo(ym))}</span><span class="lrow-s">${nb(nom[ym].n)}</span></span><span class="lrow-v neg">${eur(-nom[ym].v)}</span></div>`).join('')}</div></section>` : ''}
    ${cob.length ? `<details class="card"><summary><span class="sumt"><b>Cobrados</b><small>${nb(cob.length)}</small></span><span class="chev" aria-hidden="true">›</span></summary><div class="mlist">${cob.slice(0, 40).map(row).join('')}</div></details>` : ''}`;
 }
 const VIEWS = {inicio:vInicio, resumen:vInicio, movimientos:vMovimientos, patrimonio:vPatrimonio, analisis:vAnalisis, proyeccion:vAnalisis, ajustes:vAjustes, mas:vAjustes, stby:vStby};
@@ -1786,7 +1791,8 @@ function sheetSueldo(){
       <div class="fld"><span class="lbl">Meses en que la cobras</span><div class="chips monthchips" id="suM">${MESES_C.map((m,i) => `<button type="button" class="chip" data-m="${i+1}">${m}</button>`).join('')}</div></div></div>
     <div class="fld"><span class="lbl">La nómina que cobras a final de mes es para</span><div class="seg" id="suPara"><button type="button" data-v="siguiente">El mes siguiente</button><button type="button" data-v="mismo">Ese mismo mes</button></div><span class="note">Con «El mes siguiente», la nómina que cobras a partir del día 15 cuenta en los números del mes siguiente, que es el que paga. Al anotarla puedes cambiarlo.</span></div>
     <p class="note">La nómina se cambia en Movimientos → Fijos. Ahí puedes marcar si cambia cada mes.</p>
-    <div class="fld"><label for="suIpc">IPC anual para la proyección</label><div class="amount sm"><input id="suIpc" inputmode="decimal" value="${fmtIn(ipcAnual())}"><span>%</span></div><span class="note">Último dato publicado: ${fmtIn(IPC_DEF)} % (${IPC_FUENTE}).</span></div>
+    <div class="fld"><label for="suIrpf">Tu IRPF</label><div class="amount sm"><input id="suIrpf" inputmode="decimal" value="${fmtIn(su.irpf)}"><span>%</span></div><span class="note">Lo que te retienen en la nómina. Se usa para el coste de los billetes STBY con pago en especie.</span></div>
+    <div class="fld"><label for="suIpc">IPC anual (subida de precios)</label><div class="amount sm"><input id="suIpc" inputmode="decimal" value="${fmtIn(ipcAnual())}"><span>%</span></div><span class="note">Último dato publicado: ${fmtIn(IPC_DEF)} % (${IPC_FUENTE}).</span></div>
     ${actions(true)}</form>`, root => {
     const q = x => root.querySelector(x); setSel(q('#suCta'), c.cuentaPrincipal);
     const sync = () => { root.querySelectorAll('#suP button').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.p) === st.pagas))); q('#suExW').hidden = st.pagas !== 14; root.querySelectorAll('#suM button').forEach(b => b.setAttribute('aria-pressed', String(st.meses.has(Number(b.dataset.m))))); root.querySelectorAll('#suPara button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === st.para))); };
@@ -1797,7 +1803,8 @@ function sheetSueldo(){
     q('#fSu').addEventListener('submit', e => {
       e.preventDefault(); const ex = q('#suEx').value.trim() ? parseImporte(q('#suEx').value) : 0, ipc = parseImporte(q('#suIpc').value);
       if (!(ex >= 0)){ q('.err').textContent = 'El importe de la paga extra no es válido.'; return; } if (!(ipc > -10 && ipc < 100)){ q('.err').textContent = 'Escribe el IPC como porcentaje, por ejemplo 4,9.'; return; }
-      const nuevo = {...c, nombre:q('#suNom').value.trim() || 'Jordi', cuentaPrincipal:q('#suCta').value, ipc:r2(ipc), sueldo:{pagas:st.pagas, extra:r2(ex), meses:[...st.meses].sort((a,b) => a - b), para:st.para}};
+      const irpf = parseImporte(q('#suIrpf').value); if (!(irpf >= 0 && irpf < 60)){ q('.err').textContent = 'Escribe el IRPF como porcentaje, por ejemplo 22.'; return; }
+      const nuevo = {...c, nombre:q('#suNom').value.trim() || 'Jordi', cuentaPrincipal:q('#suCta').value, ipc:r2(ipc), sueldo:{pagas:st.pagas, extra:r2(ex), meses:[...st.meses].sort((a,b) => a - b), para:st.para, irpf:r2(irpf)}};
       closeSheet(); guardar(() => store.setCfg(nuevo), 'Guardado');
     });
   });
@@ -1859,12 +1866,14 @@ async function syncStbyMovs(id, d){
 }
 const ultimaCuentaCobro = () => [...S.stby].filter(x => x.cuentaCobro).sort((a,b) => (b.fechaCobro || '') > (a.fechaCobro || '') ? 1 : -1)[0]?.cuentaCobro;
 function sheetStby(t){
-  const edit = !!t, st = {pago: t?.pago || 'nomina', cobTocado: edit};
+  const edit = !!t, st = {pago: t?.pago || 'nomina', cobTocado: edit}, irpf = Number(S.cfg.sueldo?.irpf) || 0;
   const personas = [...new Set(S.stby.map(x => (x.persona || '').trim()).filter(Boolean))].sort((a,b) => a.localeCompare(b));
   openSheet(edit ? 'Editar billete' : 'Nuevo billete STBY', `<form id="fStby" class="form" novalidate>
     <div class="fld"><label for="bPer">¿Para quién?</label><input id="bPer" autocomplete="off" list="bPerL" placeholder="Ej: Marta" value="${esc(t?.persona || '')}"><datalist id="bPerL">${personas.map(p => `<option value="${esc(p)}"></option>`).join('')}</datalist></div>
     <div class="fld"><label for="bDet">Vuelo <i>(opcional)</i></label><input id="bDet" autocomplete="off" placeholder="Ej: BCN–AMS, 14 nov" value="${esc(t?.detalle || '')}"></div>
-    <div class="grid2"><div class="fld"><label for="bCoste">Te cuesta</label><div class="amount sm"><input id="bCoste" inputmode="decimal" placeholder="0" value="${t ? fmtIn(t.coste) : ''}"><span>€</span></div></div><div class="fld"><label for="bCobrar">Le cobras</label><div class="amount sm"><input id="bCobrar" inputmode="decimal" placeholder="0" value="${t ? fmtIn(t.cobrar) : ''}"><span>€</span></div></div></div>
+    <div class="grid2"><div class="fld"><label for="bCoste">Te cuesta</label><div class="amount sm"><input id="bCoste" inputmode="decimal" placeholder="0" value="${t ? fmtIn(t.coste) : ''}"><span>€</span></div></div><div class="fld"><label for="bEsp">Pago en especie</label><div class="amount sm"><input id="bEsp" inputmode="decimal" placeholder="0" value="${t?.especie ? fmtIn(t.especie) : ''}"><span>€</span></div></div></div>
+    <div class="calc" id="bCalc" hidden></div>
+    <div class="fld"><label for="bCobrar">Le cobras</label><div class="amount sm"><input id="bCobrar" inputmode="decimal" placeholder="0" value="${t ? fmtIn(t.cobrar) : ''}"><span>€</span></div></div>
     <p class="note" id="bDif"></p>
     <div class="fld"><label for="bFecha">Cuándo lo sacaste</label><input type="date" id="bFecha" value="${esc(t?.fecha || hoyISO())}"></div>
     <div class="fld"><span class="lbl">¿Cómo lo pagas tú?</span><div class="seg" id="bPago" role="group" aria-label="Cómo lo pagas"><button type="button" data-p="nomina">Descuento en nómina</button><button type="button" data-p="tarjeta">Tarjeta o cuenta</button></div></div>
@@ -1875,26 +1884,33 @@ function sheetStby(t){
     ${actions(edit)}${edit ? '<button type="button" class="btn danger" id="bDel">Eliminar billete</button>' : ''}</form>`, root => {
     const q = x => root.querySelector(x);
     setSel(q('#bCta'), t?.cuentaPago || S.cfg.cuentaPrincipal); setSel(q('#bCobCta'), t?.cuentaCobro || ultimaCuentaCobro() || S.cfg.cuentaPrincipal);
-    const dif = () => { const c = q('#bCoste').value.trim() ? parseImporte(q('#bCoste').value) : NaN, v = q('#bCobrar').value.trim() ? parseImporte(q('#bCobrar').value) : NaN, n = q('#bDif'); n.className = 'note';
-      if (!(c >= 0) || !(v >= 0)){ n.textContent = ''; return; } const d = r2(v - c);
+    const num = id => { const v = q(id).value.trim(); return v ? parseImporte(v) : 0; };
+    const total = () => { const c = num('#bCoste'), e = num('#bEsp'); return c >= 0 && e >= 0 ? r2(c + e*irpf/100) : NaN; };
+    const calc = () => { const c = num('#bCoste'), e = num('#bEsp'), box = q('#bCalc'); box.hidden = !(e > 0 && c >= 0); if (box.hidden) return;
+      const ret = r2(e*irpf/100);
+      box.innerHTML = `<dl><div><dt>Billete</dt><dd>${eur(c)}</dd></div><div><dt>IRPF del pago en especie (${eur(e)} × ${fmtIn(irpf)} %)</dt><dd>${eur(ret)}</dd></div><div class="tot"><dt>Coste total</dt><dd>${eur(c + ret)}</dd></div></dl><p class="note">El ${fmtIn(irpf)} % es tu IRPF. Lo cambias en Ajustes → Sueldo y pagas.</p>`; };
+    const dif = () => { const c = total(), v = q('#bCobrar').value.trim() ? parseImporte(q('#bCobrar').value) : NaN, n = q('#bDif'); n.className = 'note';
+      if (!q('#bCoste').value.trim() && !q('#bEsp').value.trim() || !(c >= 0) || !(v >= 0)){ n.textContent = ''; return; } const d = r2(v - c);
       n.textContent = Math.abs(d) < .005 ? 'Le cobras lo mismo que te cuesta.' : d > 0 ? `Le cobras ${eur(d)} más de lo que te cuesta.` : `Le cobras ${eur(-d)} menos de lo que te cuesta.`; if (d < 0) n.classList.add('warn'); };
-    const sync = () => { q('#bPago').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.p === st.pago))); q('#bMesW').hidden = st.pago !== 'nomina'; q('#bCtaW').hidden = st.pago !== 'tarjeta'; q('#bCobW').hidden = !q('#bCob').checked; dif(); };
+    const sync = () => { q('#bPago').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.p === st.pago))); q('#bMesW').hidden = !(st.pago === 'nomina' || num('#bEsp') > 0); q('#bCtaW').hidden = st.pago !== 'tarjeta'; q('#bCobW').hidden = !q('#bCob').checked; calc(); dif(); };
     q('#bPago').addEventListener('click', e => { const b = e.target.closest('button'); if (b){ st.pago = b.dataset.p; sync(); } });
     q('#bCob').addEventListener('change', sync);
-    q('#bCoste').addEventListener('input', () => { if (!st.cobTocado) q('#bCobrar').value = q('#bCoste').value; dif(); });
+    /* Mientras no toques «Le cobras», propone el coste total */
+    const alCambiar = () => { if (!st.cobTocado){ const tot = total(); q('#bCobrar').value = tot > 0 ? fmtIn(tot) : ''; } sync(); };
+    q('#bCoste').addEventListener('input', alCambiar); q('#bEsp').addEventListener('input', alCambiar);
     q('#bCobrar').addEventListener('input', () => { st.cobTocado = true; dif(); });
     sync();
     if (!edit) setTimeout(() => q('#bPer')?.focus(), 80);
     q('#fStby').addEventListener('submit', e => {
       e.preventDefault(); const err = q('.err'); err.textContent = '';
-      const per = q('#bPer').value.trim(), coste = q('#bCoste').value.trim() ? parseImporte(q('#bCoste').value) : 0, cobrar = q('#bCobrar').value.trim() ? parseImporte(q('#bCobrar').value) : coste;
+      const per = q('#bPer').value.trim(), coste = q('#bCoste').value.trim() ? parseImporte(q('#bCoste').value) : 0, especie = q('#bEsp').value.trim() ? parseImporte(q('#bEsp').value) : 0, cobrar = q('#bCobrar').value.trim() ? parseImporte(q('#bCobrar').value) : r2(coste + especie*irpf/100);
       const fecha = q('#bFecha').value || hoyISO(), mes = q('#bMes').value, cob = q('#bCob').checked;
       if (!per){ err.textContent = 'Pon para quién es el billete.'; q('#bPer').focus(); return; }
-      if (!(coste >= 0) || !(cobrar >= 0)){ err.textContent = 'Revisa los importes: tienen que ser números.'; return; }
+      if (!(coste >= 0) || !(especie >= 0) || !(cobrar >= 0)){ err.textContent = 'Revisa los importes: tienen que ser números.'; return; }
       if (!(coste > 0) && !(cobrar > 0)){ err.textContent = 'Pon lo que te cuesta y lo que le cobras.'; q('#bCoste').focus(); return; }
-      if (st.pago === 'nomina' && !isYM(mes)){ err.textContent = 'Escribe el mes de la nómina como 2026-11.'; return; }
+      if ((st.pago === 'nomina' || especie > 0) && !isYM(mes)){ err.textContent = 'Escribe el mes de la nómina como 2026-11.'; return; }
       const id = t?.id || uid('s');
-      const doc = {persona:per, detalle:q('#bDet').value.trim(), fecha, coste:r2(coste), cobrar:r2(cobrar), pago:st.pago, mesNomina: st.pago === 'nomina' ? mes : null, cuentaPago: st.pago === 'tarjeta' ? q('#bCta').value : null,
+      const doc = {persona:per, detalle:q('#bDet').value.trim(), fecha, coste:r2(coste), especie:r2(especie), irpf: especie > 0 ? irpf : 0, cobrar:r2(cobrar), pago:st.pago, mesNomina: st.pago === 'nomina' || especie > 0 ? mes : null, cuentaPago: st.pago === 'tarjeta' ? q('#bCta').value : null,
         cobrado:cob, fechaCobro: cob ? (q('#bCobF').value || hoyISO()) : null, cuentaCobro: cob ? q('#bCobCta').value : null, creado:t?.creado || new Date().toISOString()};
       closeSheet(); guardar(async () => { await store.set('stby', id, doc); await syncStbyMovs(id, doc); }, edit ? 'Billete guardado' : `Apuntado: ${per}, ${eur(cobrar)}`);
     });
@@ -2408,7 +2424,6 @@ const ACT = {
   'new-deuda': () => sheetDeuda(), 'edit-deuda': b => { const d = S.deudas.find(x => x.id === b.dataset.id); if (d) sheetDeuda(d); },
   'new-obj': b => sheetObj(null, b.dataset.preset), 'edit-obj': b => { const o = S.objs.find(x => x.id === b.dataset.id); if (o) sheetObj(o); },
   ftipo: b => { S.ftipo = b.dataset.v; render(); },
-  ipc: b => { S.ipc = b.dataset.v === '1'; render(); },
   'ver-movs': () => ir('movimientos', false),
   'export-json': () => exportar('json'), 'export-csv': () => exportar('csv'),
   reset: () => sheetReset(),
