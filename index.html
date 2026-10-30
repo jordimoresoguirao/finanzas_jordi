@@ -104,7 +104,7 @@ b{font-weight:700}
 .hero{background:linear-gradient(155deg,var(--hero-1) 0%,var(--hero-2) 100%);color:var(--hero-ink);border-radius:28px;padding:16px 20px 20px;display:grid;box-shadow:var(--lift)}
 .hero-top{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:36px}
 .hseg{display:inline-flex;background:rgba(255,255,255,.08);border-radius:999px;padding:3px}
-.hseg button{padding:7px 13px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--hero-mute)}
+.hseg button{white-space:nowrap;padding:7px 13px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--hero-mute)}
 .hseg button[aria-pressed="true"]{background:rgba(255,255,255,.15);color:var(--hero-ink)}
 .hero-cap{font-size:11.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--hero-ink)}
 .hero-r{font-size:12.5px;color:var(--hero-mute);font-weight:600}
@@ -133,6 +133,7 @@ b{font-weight:700}
 .hero-btn2{min-height:44px;padding:0 20px;border-radius:999px;font-weight:700;color:var(--hero-ink);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.28);cursor:pointer}
 label.prow{cursor:pointer}
 .pasos a{color:var(--accent);font-weight:700;overflow-wrap:anywhere}
+.hero-link{justify-self:start;margin-top:12px;font-size:12.5px;color:var(--hero-mute);text-decoration:underline;text-underline-offset:3px}
 .hero-skel{height:58px;width:60%;border-radius:14px;background:rgba(255,255,255,.08);margin-top:8px}
 
 /* Tarjetas y filas */
@@ -1030,31 +1031,84 @@ function timeline(n, idx, a, z, h){
   const hoyEl = pct < 14 || pct > 86 ? `<span class="hoy" ${pos}>${h}</span>` : `<span ${pos}>${h}</span>`;
   return `<div class="tl" aria-hidden="true"><div class="tl-dots" style="--tlgap:${n > 15 ? 3 : 6}px">${dots}</div><div class="tl-lbl">${pct >= 30 ? `<span style="left:0">${a}</span>` : ''}${hoyEl}${pct <= 70 ? `<span style="right:0">${z}</span>` : ''}</div></div>`;
 }
+/* ===== Hasta cobrar: dinero real de hoy (banco y tarjeta) menos lo que falta por pagar hasta el día antes de cada nómina ===== */
+const esLiquida = c => !!c && (c.tipo === 'banco' || c.tipo === 'sobre');
+function ciclosNomina(n = 12){
+  const hoy = hoyISO(), manana = addDays(hoy, 1), cfg = S.cfg, sb = cfg.sobre || {}, su = cfg.sueldo || {}, cm = ctasMap(), dc = deudasCtx();
+  const liq = id => esLiquida(cm[id]), tarjeta = sb.importe > 0 && sb.cuenta ? cm[sb.cuenta] : null;
+  const nom = S.recs.find(r => r.tipo === 'ingreso' && r.cat === 'nomina' && r.activo !== false);
+  /* La nómina que viene: la media de las últimas 3 que has anotado; si no hay ninguna, tu estimación */
+  const ult = nom ? S.movs.filter(m => m.tipo === 'ingreso' && m.cat === nom.cat).slice(0, 3) : [];
+  const nominaPrev = !nom ? 0 : nom.variable && ult.length ? r2(ult.reduce((a,m) => a + m.importe, 0)/ult.length) : nom.importe;
+  let pendiente = 0; const cobros = [];
+  if (nom){
+    let pr = esperada(nom, hoy).exp;
+    if (pr <= hoy){ pendiente = nominaPrev; pr = fechaPago(addMonths(ymOf(pr), 1), nom.dia); }   /* ya tocaba y aún no está anotada */
+    for (let k = 0; k < n; k++) cobros.push(fechaPago(addMonths(ymOf(pr), k), nom.dia));
+  } else for (let k = 1; k <= n; k++) cobros.push(addMonths(ymOf(hoy), k) + '-01');
+  const extra = f => Number(su.pagas) === 14 && (su.meses || [6,12]).includes(Number(f.slice(5, 7))) ? Number(su.extra) || 0 : 0;
+  const hoyLiq = r2(S.cuentas.filter(esLiquida).reduce((a,c) => a + saldo(c), 0));
+  const ciclos = []; let queda = r2(hoyLiq + pendiente), desde = manana;
+  for (let k = 0; k < n; k++){
+    const cobro = cobros[k], hasta = addDays(cobro, -1), F = {nomina:0, otros:0, fijos:0, aportes:0, sobre:0, lunes:0, plan:0, tarjeta:0};
+    if (k === 0){ F.nomina = pendiente; if (tarjeta) F.tarjeta = Math.max(saldo(tarjeta), 0); }
+    else { F.nomina = nominaPrev; F.otros += extra(cobros[k - 1]); }
+    const dentro = f => f >= desde && f <= hasta;
+    for (let ym = ymOf(desde); ym <= ymOf(hasta); ym = addMonths(ym, 1)){
+      for (const rc of S.recs){
+        if (rc === nom || rc.activo === false || !recActiva(rc, ym) || (rc.omitidos||[]).includes(ym)) continue;
+        const f = fechaPago(ym, rc.dia); if (!dentro(f)) continue;
+        let imp = rc.importe;
+        if (rc.deuda){ const df = dc[rc.deuda]; if (df && (df.pagado || (df.fin && ym > df.fin))) continue; if (df && ym === df.fin) imp = df.ultima; }
+        if (rc.tipo === 'gasto'){ if (liq(rc.cuenta)) F.fijos += imp; }
+        else if (rc.tipo === 'ingreso'){ if (liq(rc.cuenta)) F.otros += imp; }
+        else if (liq(rc.desde) && !liq(rc.hacia)) F.aportes += imp;
+        else if (!liq(rc.desde) && liq(rc.hacia)) F.otros += imp;
+      }
+      for (const pl of S.plans){ if (!planEnMes(pl, ym)) continue; const f = ym === ymOf(hoy) ? manana : `${ym}-01`; if (!dentro(f)) continue; if (pl.tipo === 'ingreso') F.otros += pl.importe; else F.plan += pl.importe; }
+    }
+    /* El sobre, como si lo gastaras entero: cada recarga de la tarjeta y, ahora, lo que aún queda en ella */
+    if (sb.importe > 0 && sb.cuenta){ F.lunes = recargasEntre(addDays(desde, -1), hasta, Number(sb.dia) || 0); F.sobre = F.tarjeta + F.lunes*sb.importe; if (!liq(sb.origen)) F.otros += F.lunes*sb.importe; }
+    for (const key of Object.keys(F)) F[key] = r2(F[key]);
+    queda = r2(queda + (k === 0 ? 0 : F.nomina) + F.otros - F.fijos - F.aportes - F.sobre - F.plan);
+    ciclos.push({cobro, desde, hasta, ...F, queda});
+    desde = cobro;
+  }
+  return {hoyLiq, pendiente, nom:!!nom, dia: nom?.dia, nominaPrev, nominaN: nom?.variable ? ult.length : 0, ciclos};
+}
+const i18nLiq = liqN => liqN.length ? liqN.join(' + ') : '';
+const antesDeCobrar = (C, c) => C.nom ? `cobrar el ${fechaDM(c.cobro)}` : `final de ${mesNombre(ymOf(c.hasta))}`;
+
 function vHero(hoy){
   const sb = S.cfg.sobre, haySobre = sb.importe > 0 && sb.cuenta, modo = haySobre ? (S.hero || 'semana') : 'mes';
-  const seg = haySobre ? `<div class="hseg" role="group" aria-label="Periodo"><button data-act="hero" data-v="semana" aria-pressed="${modo === 'semana'}">Semana</button><button data-act="hero" data-v="mes" aria-pressed="${modo === 'mes'}">Mes</button></div>` : `<p class="hero-cap">${mesNombre(ymOf(hoy))}</p>`;
+  const seg = haySobre ? `<div class="hseg" role="group" aria-label="Qué ver"><button data-act="hero" data-v="semana" aria-pressed="${modo === 'semana'}">Semana</button><button data-act="hero" data-v="mes" aria-pressed="${modo === 'mes'}">Hasta cobrar</button></div>` : `<p class="hero-cap">Hasta cobrar</p>`;
   if (modo === 'semana'){
-    const e = estadoSobre(sb, S.movs, hoy), over = e.queda < 0, idx = diffDays(e.ini, hoy);
-    return `<section class="hero ${over ? 'is-over' : ''}" aria-label="Sobre de esta semana">
-      <div class="hero-top">${seg}<p class="hero-r">${e.diasRest === 1 ? 'Mañana recargas' : `Quedan ${e.diasRest} días`}</p></div>
-      <p class="hero-k">${over ? 'Te has pasado esta semana' : 'Te queda esta semana'}</p>
-      <p class="hero-big">${eur(over ? -e.queda : e.queda)}</p>
-      <p class="hero-sub">${over ? `Por encima de los ${eur(e.disponible)} del sobre. Hasta el ${DIAS[sb.dia]}, lo que gastes sale de otro sitio.` : e.queda > 0 ? `Unos ${eur(e.porDia)} al día hasta el ${DIAS[sb.dia]}` : 'Sobre gastado. Recargas el ' + DIAS[sb.dia] + '.'}</p>
+    /* Lo que te queda esta semana es lo que hay de verdad en la tarjeta del sobre */
+    const e = estadoSobre(sb, S.movs, hoy), t = S.cuentas.find(c => c.id === sb.cuenta), queda = t ? saldo(t) : e.queda, over = queda < 0, idx = diffDays(e.ini, hoy);
+    const porDia = queda > 0 && e.diasRest > 0 ? r2(queda/e.diasRest) : 0;
+    return `<section class="hero ${over ? 'is-over' : ''}" aria-label="Tarjeta del sobre esta semana">
+      <div class="hero-top">${seg}</div>
+      <p class="hero-k">${over ? 'La tarjeta está en negativo' : 'Te queda en la tarjeta'}</p>
+      <p class="hero-big">${eur(queda)}</p>
+      <p class="hero-sub">${over ? `Si en ${esc(t?.nombre || 'el banco')} no es así, falta anotar algo o el saldo no está al día.` : queda > 0 ? `Unos ${eur(porDia)} al día hasta el ${DIAS[sb.dia]}, cuando recargas ${eur(sb.importe)}.` : `Tarjeta vacía. El ${DIAS[sb.dia]} recargas ${eur(sb.importe)}.`}</p>
       ${timeline(7, idx, fechaCorta(e.ini).replace(/ \w+$/, ''), fechaCorta(e.fin).replace(/ \w+$/, ''), `Hoy · ${DIAS_C[fromISO(hoy).getDay()]}`)}
-      <div class="hero-foot"><span>Sobre<b>${eur(e.disponible)}</b></span><span>Gastado<b>${eur(-e.gastado)}</b></span></div>
+      <div class="hero-foot"><span>Sobre<b>${eur(sb.importe)}</b></span><span>Gastado<b>${eur(-e.gastado)}</b></span></div>
       ${heroExtra(sb, e)}
+      ${t ? (over ? `<button class="btn hero-btn" data-act="edit-cuenta" data-id="${esc(t.id)}">Poner el saldo real</button>` : `<button class="hero-link" data-act="edit-cuenta" data-id="${esc(t.id)}">¿No cuadra con ${esc(t.nombre)}? Pon el saldo real</button>`) : ''}
     </section>`;
   }
-  const ym = ymOf(hoy), r = resumenMes(ym, S.movs, ctasMap()), dia = Number(hoy.slice(8)), dRest = diasMes(ym) - dia;
-  const tq = r2(r.ing - r.gas), pp = porPagar(ym, hoy), eS = haySobre ? estadoSobre(sb, S.movs, hoy) : null, libre = r2(tq - pp.total - (eS ? Math.max(eS.queda, 0) : 0));
-  const mc = MESES_C[Number(ym.slice(5)) - 1];
-  return `<section class="hero ${tq < 0 ? 'is-over' : ''}" aria-label="Este mes">
-    <div class="hero-top">${seg}<p class="hero-r">${dRest === 0 ? 'Último día' : dRest === 1 ? 'Queda 1 día' : `Quedan ${dRest} días`}</p></div>
-    <p class="hero-k">Te queda este mes</p>
-    <p class="hero-big">${eur(tq)}</p>
-    ${pp.total > 0 || eS ? `<p class="hero-sub">Cuando pagues los fijos y sobres que faltan, te quedarán unos ${eur(libre, {dec:0})}</p>` : ''}
-    ${timeline(diasMes(ym), dia - 1, `1 ${mc}`, `${diasMes(ym)} ${mc}`, `Hoy · ${dia}`)}
-    <div class="hero-foot"><span>Ingresos<b class="p">${eur(r.ing, {signo:true})}</b></span><span>Gastos<b>${eur(-r.gas)}</b></span></div>
+  const C = ciclosNomina(1), c = C.ciclos[0], over = c.queda < 0;
+  const ini = C.nom ? fechaPago(addMonths(ymOf(c.cobro), -1), C.dia) : `${ymOf(hoy)}-01`;
+  const n = Math.max(diffDays(ini, c.cobro), 1), idx = Math.min(Math.max(diffDays(ini, hoy), 0), n - 1);
+  const porPagar_ = r2(c.fijos + c.aportes + c.sobre + c.plan - c.otros);
+  const partes = [c.fijos && `fijos ${eur(c.fijos, {dec:0})}`, c.aportes && `ahorro y huchas ${eur(c.aportes, {dec:0})}`, c.sobre && `sobre ${eur(c.sobre, {dec:0})}`, c.plan && `planificados ${eur(c.plan, {dec:0})}`].filter(Boolean);
+  return `<section class="hero ${over ? 'is-over' : ''}" aria-label="Hasta cobrar">
+    <div class="hero-top">${seg}</div>
+    <p class="hero-k">${over ? `No te llega: antes de ${antesDeCobrar(C, c)} te faltarán` : `Te quedará antes de ${antesDeCobrar(C, c)}`}</p>
+    <p class="hero-big">${eur(Math.abs(c.queda))}</p>
+    <p class="hero-sub">${C.pendiente ? `Contando la nómina que aún no has anotado (${eur(C.pendiente, {dec:0})}). ` : ''}Lo que tienes hoy menos lo que falta por pagar${partes.length ? ': ' + partes.join(', ') : ''}.</p>
+    ${timeline(n, idx, fechaDM(ini), fechaDM(c.cobro), 'Hoy')}
+    <div class="hero-foot"><span>Tienes hoy<b>${eur(C.hoyLiq)}</b></span><span>Por pagar<b>${eur(-porPagar_)}</b></span></div>
   </section>`;
 }
 function heroExtra(sb, e){
@@ -1255,9 +1309,9 @@ function vObjetivos(){
 function lecturas(ym, cur, hoy){
   const L = [], add = (nivel, html) => L.push({nivel, html}); const sb = S.cfg.sobre;
   if (ym === cur && sb.importe > 0 && sb.cuenta){
-    const e = estadoSobre(sb, S.movs, hoy);
-    if (e.queda < 0) add('alerta', `Esta semana llevas <b>${eur(-e.queda)}</b> por encima del sobre. Hasta el ${DIAS[sb.dia]}, lo que gastes sale de otro sitio.`);
-    else if (e.disponible > 0 && e.gastado/e.disponible > .8 && e.diasRest > 2) add('aviso', `Llevas el ${pct(e.gastado/e.disponible)} del sobre y quedan ${e.diasRest} días: ${eur(e.porDia)} al día.`);
+    const e = estadoSobre(sb, S.movs, hoy), t = S.cuentas.find(c => c.id === sb.cuenta), queda = t ? saldo(t) : e.queda;
+    if (queda < 0) add('alerta', `La tarjeta del sobre está en <b>${eur(queda)}</b>. Si en el banco no es así, pon su saldo real en Patrimonio.`);
+    else if (e.disponible > 0 && e.gastado/e.disponible > .8 && e.diasRest > 2) add('aviso', `Llevas el ${pct(e.gastado/e.disponible)} del sobre y quedan ${e.diasRest} días: ${eur(queda/e.diasRest)} al día.`);
   }
   const r = resumenMes(ym, S.movs, ctasMap());
   if (r.sacado > 0) add('alerta', `En ${mesNombre(ym)} has sacado <b>${eur(r.sacado)}</b> de ahorros (${esc(Object.entries(r.sacadoDe).map(([n,v]) => `${n}: ${eur(v,{dec:0})}`).join(', '))}).`);
@@ -1272,12 +1326,9 @@ function lecturas(ym, cur, hoy){
     let racha = 0, m = ym; while (m >= first && racha < 24){ if (((pmc[m]||{})[c.id]||0) > c.presupuesto + .005) racha++; else break; m = addMonths(m,-1); }
     if (n++ < 3) add('aviso', `<b>${esc(c.nombre)}</b> se pasa del presupuesto${racha > 1 ? ` (${racha} meses seguidos). Revisa si el presupuesto es realista o si toca recortar` : ''}: ${eur(g,{dec:0})} de ${eur(c.presupuesto,{dec:0})}.`); }
   if (ym === cur){
-    const nx = addMonths(cur, 1), hn = habitualMes(nx, ctx()), nRec = sb.importe > 0 ? recargasEnMes(nx, sb.dia) : 0;
-    if ((hn.ing > 0 || hn.gas > 0) && hn.neto < 0){
-      if (nRec === 5 && hn.neto + sb.importe >= 0){ const n2 = addMonths(nx, 1), h2 = habitualMes(n2, ctx());
-        add('aviso', `${cap(mesNombre(nx))} sale en ${eur(hn.neto, {dec:0})} porque tiene cinco ${diaPl(sb.dia)}: recargas el sobre cinco veces (${eur(sb.importe*5, {dec:0})} en vez de ${eur(sb.importe*4, {dec:0})}). Es normal: se compensa con los meses de cuatro${h2.neto > 0 ? `, como ${mesNombre(n2)} (${eur(h2.neto, {dec:0, signo:true})})` : ''}.`); }
-      else add('alerta', `${cap(mesNombre(nx))} sale en negativo con lo previsto: ${eur(hn.neto)}. Mira Análisis → Futuro para ver qué lo causa.`);
-    }
+    const C = ciclosNomina(1), c0 = C.ciclos[0];
+    if (c0.queda < 0) add('alerta', `No te llega: antes de ${antesDeCobrar(C, c0)} te faltarán unos <b>${eur(-c0.queda, {dec:0})}</b>. Mira Análisis → Futuro para ver de dónde sale.`);
+    else add(c0.queda < 100 ? 'aviso' : 'ok', `Antes de ${antesDeCobrar(C, c0)} te quedarán unos <b>${eur(c0.queda, {dec:0})}</b>, con lo que tienes hoy y lo que falta por pagar.`);
     const f = fijosMes(cur); if (sb.importe > 0 && f.ing > 0 && sb.importe > f.semanal + .5) add('alerta', `Tu sobre de ${eur(sb.importe,{dec:0})} no cabe en tus fijos: el máximo que te deja tu nómina es ${eur(f.semanal)} a la semana.`);
     for (const d of S.deudas){ const e = estadoDeuda(d, S.movs, hoy); if (e.pendiente > 0 && isFinite(e.cuotasRest)) add('info', `${esc(d.nombre)}: quedan ${e.cuotasRest} cuotas y ${eur(e.pendiente,{dec:0})}. Terminas en ${mesAnyo(e.finYm)}.`); }
     const viejos = S.stby.filter(t => !t.cobrado && diffDays(t.fecha, hoy) > 30); if (viejos.length) add('aviso', `Tienes ${viejos.length} ${viejos.length === 1 ? 'billete' : 'billetes'} de STBY sin cobrar desde hace más de un mes: <b>${eur(viejos.reduce((a,t) => a + t.cobrar, 0))}</b>. Toca reclamarlos.`);
@@ -1358,11 +1409,11 @@ function proyeccion(conIpc){
   for (let k = 5; k >= 1; k--){ const ym = addMonths(cur, -k); if (!first || ym < first) continue; const r = resumenMes(ym, S.movs, ctasMap()); hist.push({ym, neto:r.neto, ing:r.ing, gas:r.gas}); }
   return {rows, hist, im};
 }
-function chartSVG(bars){
+function chartSVG(bars, label = 'Ahorro neto por mes, real y previsto'){
   const W = 340, H = 196, pT = 20, pB = 24, pX = 4, n = bars.length, slot = (W - pX*2)/n, bw = Math.min(22, slot*.62);
   const max = Math.max(1, ...bars.map(b => b.v)), min = Math.min(0, ...bars.map(b => b.v)), span = max - min || 1, plotH = H - pT - pB - 14;
   const y = v => pT + (max - v)/span*plotH, y0 = y(0);
-  let s = `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Ahorro neto por mes, real y previsto"><line x1="${pX}" x2="${W-pX}" y1="${y0.toFixed(1)}" y2="${y0.toFixed(1)}" class="axis"/>`;
+  let s = `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(label)}"><line x1="${pX}" x2="${W-pX}" y1="${y0.toFixed(1)}" y2="${y0.toFixed(1)}" class="axis"/>`;
   bars.forEach((b, i) => {
     const cx = pX + slot*i + slot/2, yv = y(b.v), top = Math.min(yv, y0), h = Math.max(Math.abs(yv - y0), 1.5);
     s += `<rect x="${(cx-bw/2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="4" class="${b.real ? 'b-real' : 'b-proj'}${b.v < 0 ? ' neg' : ''}"><title>${cap(mesAnyo(b.ym))}: ${eur(b.v, {dec:0})}</title></rect>`;
@@ -1373,31 +1424,29 @@ function chartSVG(bars){
   return s + '</svg>';
 }
 function vFuturo(){
-  const {rows, hist} = proyeccion(false), cur = rows[0].ym, conIpc = proyeccion(true).rows, menosIpc = r2(rows[rows.length - 1].acum - conIpc[conIpc.length - 1].acum);
-  const bars = [...hist.map(h => ({ym:h.ym, v:h.neto, real:true})), ...rows.slice(0, 7).map((r,i) => ({ym:r.ym, v:r.neto, real:false, cur:i === 0}))];
-  const sumHist = r2(hist.reduce((a,h) => a + h.neto, 0)), next6 = r2(rows.slice(1, 7).reduce((a,r) => a + r.neto, 0));
-  const cell = (v, opt = {}) => v ? `<td class="${opt.cur ? 'cur' : ''} ${opt.neg && v < 0 ? 'neg' : ''}">${eur(v, {dec:0})}</td>` : `<td class="dim ${opt.cur ? 'cur' : ''}">—</td>`;
-  const media = hist.length >= 2 ? (() => { const n = hist.length, i = hist.reduce((a,h) => a + h.ing, 0)/n, g = hist.reduce((a,h) => a + h.gas, 0)/n; return `<p class="muted">Tu media real de los últimos ${n} meses cerrados: ingresos ${eur(i, {dec:0})}, gastos ${eur(g, {dec:0})}, ahorro ${eur(i - g, {dec:0})} al mes.</p>`; })() : '';
-  const plans = [...S.plans].sort((a,b) => a.mes < b.mes ? -1 : 1), im = ipcMes();
-  return `<section class="card"><div style="display:grid;gap:4px"><h2>Ahorro neto mes a mes</h2><p class="muted">Real hasta el mes pasado; previsto desde ${mesNombre(cur)}.</p></div>
-    <div class="legend"><span><i class="lg-real"></i>Real</span><span><i class="lg-proj"></i>Previsto</span></div>
-    ${chartSVG(bars)}
-    <div class="split"><p>${hist.length ? `Ahorrado ${MESES_C[Number(hist[0].ym.slice(5))-1]}–${MESES_C[Number(hist[hist.length-1].ym.slice(5))-1]}` : `Previsto en ${mesNombre(cur)}`}<b class="${(hist.length ? sumHist : rows[0].neto) < 0 ? 'neg' : ''}">${eur(hist.length ? sumHist : rows[0].neto, {dec:0})}</b></p><p>Próximos 6 meses<b class="${next6 < 0 ? 'neg' : ''}">${eur(next6, {dec:0})}</b></p></div>
+  const C = ciclosNomina(12), cs = C.ciclos, ult = cs[cs.length - 1], sb = S.cfg.sobre, cur = ymOf(hoyISO()), plans = [...S.plans].sort((a,b) => a.mes < b.mes ? -1 : 1), im = ipcMes();
+  const liqN = S.cuentas.filter(esLiquida).map(c => c.nombre), nombres = liqN.length > 1 ? `${liqN.slice(0, -1).join(', ')} y ${liqN[liqN.length - 1]}` : (liqN[0] || 'tus cuentas');
+  const bars = cs.slice(0, 7).map((c, i) => ({ym: ymOf(C.nom ? c.cobro : c.hasta), v: c.queda, real: false, cur: i === 0}));
+  const cell = (v, o = {}) => v ? `<td class="${o.cur ? 'cur' : ''} ${o.neg && v < 0 ? 'neg' : ''}">${eur(v, {dec:0})}${o.s ? `<small>${o.s}</small>` : ''}</td>` : `<td class="dim ${o.cur ? 'cur' : ''}">—</td>`;
+  const lunes = (c, i) => c.lunes ? `${c.lunes} ${c.lunes === 1 ? DIAS[sb.dia] : diaPl(sb.dia)}${i === 0 && c.tarjeta > 0 ? ' + tarjeta' : ''}` : (i === 0 && c.tarjeta > 0 ? 'lo de la tarjeta' : '');
+  return `<section class="card"><div style="display:grid;gap:4px"><h2>¿Te llega hasta cada nómina?</h2><p class="muted">Lo que te quedará en ${esc(nombres)} ${C.nom ? 'justo antes de cobrar cada nómina' : 'a final de cada mes'}, partiendo de lo que tienes hoy: ${eur(C.hoyLiq)}.</p></div>
+    ${chartSVG(bars, C.nom ? 'Dinero que te quedará antes de cada nómina' : 'Dinero que te quedará a final de cada mes')}
+    <div class="split"><p>Antes de ${antesDeCobrar(C, cs[0])}<b class="${cs[0].queda < 0 ? 'neg' : ''}">${eur(cs[0].queda, {dec:0})}</b></p><p>Dentro de un año<b class="${ult.queda < 0 ? 'neg' : ''}">${eur(ult.queda, {dec:0})}</b></p></div>
     ${!S.recs.length ? `<p class="banner">Aún no tienes fijos. Añade la nómina y los gastos fijos para que la proyección tenga sentido.</p>` : ''}</section>
-   <section class="card"><h2>Mes a mes</h2>
-    <p class="muted">Con los precios de hoy.${menosIpc >= 1 ? ` Si los precios suben como el IPC (${fmtIn(ipcAnual())} % al año), el sobre y tus gastos fijos costarán algo más: en 12 meses ahorrarías unos ${eur(menosIpc, {dec:0})} menos.` : ''}</p>
-    <div class="tscroll"><table class="ptable"><thead><tr><th scope="col"><span class="sr">Concepto</span></th>${rows.map(r => `<th scope="col">${cap(mesCorto(r.ym))}${r.actual ? '<small>en curso</small>' : ''}</th>`).join('')}</tr></thead><tbody>
-      <tr><th scope="row">Ingresos previstos<small>nómina y pagas extra</small></th>${rows.map(r => cell(r.ing, {cur:r.actual})).join('')}</tr>
-      <tr><th scope="row">+ Ingresos planificados</th>${rows.map(r => cell(r.plIng, {cur:r.actual})).join('')}</tr>
-      <tr><th scope="row">Gastos fijos<small>con préstamo y huchas</small></th>${rows.map(r => cell(r.gas - r.sobre ? -(r.gas - r.sobre) : 0, {cur:r.actual})).join('')}</tr>
-      <tr><th scope="row">Sobre<small>según las recargas del mes</small></th>${rows.map(r => { const dS = Number(S.cfg.sobre.dia) || 0, n = recargasEnMes(r.ym, dS); return r.sobre ? `<td class="${r.actual ? 'cur' : ''}">${eur(-r.sobre, {dec:0})}<small>${n} ${diaPl(dS)}</small></td>` : `<td class="dim ${r.actual ? 'cur' : ''}">—</td>`; }).join('')}</tr>
-      <tr><th scope="row">+ Gastos planificados</th>${rows.map(r => cell(r.plGas ? -r.plGas : 0, {cur:r.actual})).join('')}</tr>
-      <tr><th scope="row">Real hasta hoy<small>ingresos − gastos</small></th>${rows.map(r => r.actual ? cell(r2(r.realI - r.realG), {cur:true, neg:true}) : '<td class="dim">—</td>').join('')}</tr>
-      <tr class="tot"><th scope="row">Ahorro neto</th>${rows.map(r => `<td class="${r.actual ? 'cur' : ''} ${r.neto < 0 ? 'neg' : ''}">${eur(r.neto, {dec:0})}</td>`).join('')}</tr>
-      <tr><th scope="row">Acumulado</th>${rows.map(r => `<td class="${r.actual ? 'cur' : ''} ${r.acum < 0 ? 'neg' : ''}">${eur(r.acum, {dec:0})}</td>`).join('')}</tr>
+   <section class="card"><h2>${C.nom ? 'Nómina a nómina' : 'Mes a mes'}</h2>
+    <p class="muted">${C.nom ? 'Cada columna va desde una nómina hasta el día antes de la siguiente.' : 'Cada columna es un mes.'} Con los precios de hoy.</p>
+    <div class="tscroll"><table class="ptable"><thead><tr><th scope="col"><span class="sr">Concepto</span></th>${cs.map((c, i) => `<th scope="col">${i === 0 ? 'Desde hoy' : C.nom ? `Nómina ${fechaDM(c.desde)}` : cap(mesCorto(ymOf(c.desde)))}<small>hasta el ${fechaDM(c.hasta)}</small></th>`).join('')}</tr></thead><tbody>
+      <tr><th scope="row">Al empezar<small>${i18nLiq(liqN)}</small></th>${cs.map((c, i) => cell(i === 0 ? C.hoyLiq : cs[i - 1].queda, {cur: i === 0, neg: true})).join('')}</tr>
+      ${C.nom ? `<tr><th scope="row">+ Nómina<small>unos ${eur(C.nominaPrev, {dec:0})}</small></th>${cs.map((c, i) => cell(c.nomina, {cur: i === 0, s: i === 0 && c.nomina ? 'sin anotar' : ''})).join('')}</tr>` : ''}
+      <tr><th scope="row">+ Otros ingresos<small>pagas extra y planificados</small></th>${cs.map((c, i) => cell(c.otros, {cur: i === 0})).join('')}</tr>
+      <tr><th scope="row">Gastos fijos<small>con el préstamo</small></th>${cs.map((c, i) => cell(-c.fijos, {cur: i === 0})).join('')}</tr>
+      <tr><th scope="row">Ahorro y huchas<small>lo que apartas</small></th>${cs.map((c, i) => cell(-c.aportes, {cur: i === 0})).join('')}</tr>
+      <tr><th scope="row">Sobre<small>como si lo gastaras entero</small></th>${cs.map((c, i) => cell(-c.sobre, {cur: i === 0, s: lunes(c, i)})).join('')}</tr>
+      <tr><th scope="row">Gastos planificados</th>${cs.map((c, i) => cell(-c.plan, {cur: i === 0})).join('')}</tr>
+      <tr class="tot"><th scope="row">Te quedará</th>${cs.map((c, i) => `<td class="${i === 0 ? 'cur' : ''} ${c.queda < 0 ? 'neg' : ''}">${eur(c.queda, {dec:0})}</td>`).join('')}</tr>
     </tbody></table></div>
-    <p class="muted">Desliza la tabla para ver los 12 meses.</p>${media}${notaNomina()}
-    <details class="how"><summary>Cómo se calcula</summary><p>Ingresos y gastos fijos salen de tus fijos de cada mes. Si tu nómina cambia cada mes, se usa la media de las últimas tres que hayas anotado; si la de un mes ya la has cobrado, se usa lo que cobraste. El sobre cuenta las recargas reales de cada mes: 4 o 5 según cuántos ${diaPl(S.cfg.sobre.dia)} tenga. Las pagas extra salen de Ajustes → Sueldo y pagas. La cuota del préstamo deja de contar cuando lo terminas. Lo que apartas en huchas para gastos cuenta como gasto previsto, porque lo vas a gastar. Lo que va a ahorro e inversión no es gasto: es parte del ahorro. El mes en curso se queda con lo que ya has anotado o con lo previsto, lo que sea mayor.</p></details></section>
+    <p class="muted">Desliza la tabla para ver el año entero.</p>
+    <details class="how"><summary>Cómo se calcula</summary><p>Parte del saldo de hoy de ${esc(nombres)}; si no cuadra con el banco, ajústalo en Patrimonio. ${C.nom ? `Suma cada nómina el día que la cobras: ${C.nominaN ? `la media de las últimas ${C.nominaN === 1 ? 'que has anotado' : C.nominaN + ' que has anotado'}` : 'tu estimación'}, unos ${eur(C.nominaPrev, {dec:0})}. ` : ''}Resta los fijos que pagas desde esas cuentas, lo que apartas a huchas y ahorro, y el sobre como si lo gastaras entero: cada recarga y, en el primer tramo, lo que aún te queda en la tarjeta. Las huchas, el ahorro y lo que te deben por STBY no cuentan como dinero disponible. Todo con los precios de hoy.</p></details></section>
    <section class="card"><div style="display:grid;gap:4px"><h2>Gastos e ingresos planificados</h2><p class="muted">Lo que ya sabes que viene: un viaje, regalos, una compra a plazos, un bono…</p></div>
     <div class="recbtns"><button class="btn small primary" data-act="new-plan" data-t="gasto">+ Gasto futuro</button><button class="btn small ghost" data-act="new-plan" data-t="ingreso">+ Ingreso futuro</button></div>
     ${plans.length ? `<div class="mlist">${plans.map(p => {
