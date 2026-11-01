@@ -866,6 +866,7 @@ async function generarRecurrentes(){
   S.generando = true;
   try {
     const hoy = hoyISO(), cur = ymOf(hoy), min = [addMonths(cur, -2), inicioApp()].sort()[1];
+    for (const rc of [...S.recs]) if ((rc.omitidos||[]).includes(cur) && fechaPago(cur, rc.dia) > hoy) await store.set('rec', rc.id, {...strip(rc), omitidos:rc.omitidos.filter(x => x !== cur)});
     for (const rc of [...S.recs]){
       if (rc.activo === false || rc.variable || !(rc.importe > 0)) continue;
       for (let ym = rc.inicio && rc.inicio > min ? rc.inicio : min; ym <= cur; ym = addMonths(ym, 1)){
@@ -1595,8 +1596,9 @@ function sheetMov(m, pre = {}){
       if (ok && repite){ await guardar(() => store.set('rec', uid('r'), {tipo:doc.tipo, detalle:doc.detalle || (doc.cat ? catNombre(doc.cat) : 'Traspaso'), importe:doc.importe, cat:doc.cat, cuenta:doc.cuenta, desde:doc.desde, hacia:doc.hacia, dia:Number(fecha.slice(8)), inicio:addMonths(ymOf(fecha), 1), activo:true, omitidos:[], creado:new Date().toISOString()}), 'Anotado y guardado como fijo mensual'); }
     });
     const del = q('#mDel'); if (del) armar(del, 'Toca otra vez para eliminar', async () => {
-      closeSheet(); const copia = strip(m);
-      await guardar(async () => { await store.del('mov', m.id); const rc = m.rec && S.recs.find(r => r.id === m.rec); if (rc){ const om = new Set(rc.omitidos||[]); om.add(ymOf(m.fecha)); await store.set('rec', rc.id, {...strip(rc), omitidos:[...om]}); } }, 'Movimiento eliminado', () => guardar(() => store.set('mov', m.id, copia), 'Recuperado'));
+      closeSheet(); const copia = strip(m), rc = m.rec && S.recs.find(r => r.id === m.rec), ym = ymOf(m.fecha), cuando = rc ? fechaPago(ym, rc.dia) : null, vuelve = !!rc && cuando > hoyISO();
+      await guardar(async () => { await store.del('mov', m.id); if (rc && !vuelve){ const om = new Set(rc.omitidos||[]); om.add(ym); await store.set('rec', rc.id, {...strip(rc), omitidos:[...om]}); } },
+        vuelve ? `Eliminado. Se volverá a anotar el ${fechaDM(cuando)}` : rc ? `Eliminado. Este mes ya no se anota ${rc.detalle ? '«' + rc.detalle + '»' : 'este fijo'}` : 'Movimiento eliminado', () => guardar(() => store.set('mov', m.id, copia), 'Recuperado'));
     });
   });
 }
@@ -1615,7 +1617,6 @@ function sheetRec(rc, tipoIni){
     <div class="grid2" id="rTrasW"><div class="fld"><label for="rDesde">Desde</label><select id="rDesde">${optsCuentas()}</select></div><div class="fld"><label for="rHacia">Hacia</label><select id="rHacia">${optsCuentas(true)}</select></div></div>
     <div class="grid2"><div class="fld"><label for="rDia" id="rDiaL">Día del mes</label><input id="rDia" type="number" inputmode="numeric" min="1" max="31" value="${rc?.dia || ''}" placeholder="1" ${esDeuda ? 'readonly' : ''}></div><div class="fld"><label for="rIni">Empieza en</label><input id="rIni" type="month" value="${esc(rc?.inicio || cur)}" placeholder="${cur}"></div></div>
     ${edit ? `<label class="check"><input type="checkbox" id="rAct" ${rc.activo !== false ? 'checked' : ''}><span>Activo</span></label>` : ''}
-    ${edit && !esDeuda ? `<label class="check"><input type="checkbox" id="rSkip" ${(rc.omitidos||[]).includes(cur) ? 'checked' : ''}><span>Este mes (${mesNombre(cur)}) no lo pago</span></label>` : ''}
     <p class="note" id="rNote"></p>
     ${actions(edit)}${edit ? '<button type="button" class="btn danger" id="rDel">Eliminar fijo</button>' : ''}</form>`, root => {
     const q = s => root.querySelector(s);
@@ -1628,8 +1629,6 @@ function sheetRec(rc, tipoIni){
     setSel(q('#rCta'), rc?.cuenta || S.cfg.cuentaPrincipal); setSel(q('#rDesde'), rc?.desde || S.cfg.cuentaPrincipal); setSel(q('#rHacia'), rc?.hacia || S.cuentas.find(c => c.tipo === 'inversion' || c.tipo === 'hucha')?.id);
     q('.seg')?.addEventListener('click', e => { const b = e.target.closest('button'); if (b){ st.tipo = b.dataset.t; q('#rCat').innerHTML = ''; sync(); } });
     q('#rVar').addEventListener('change', syncVar);
-    /* Si lo mueves a un día de este mes que aún no ha llegado, deja de estar saltado */
-    q('#rDia').addEventListener('input', () => { const d = Math.round(Number(q('#rDia').value)); if (q('#rSkip') && d >= 1 && d <= 31 && fechaPago(cur, d) > hoyISO()) q('#rSkip').checked = false; });
     sync();
     q('#fRec').addEventListener('submit', async e => {
       e.preventDefault(); const err = q('.err'); const imp = parseImporte(q('#rImp').value), dia = Math.round(Number(q('#rDia').value)), ini = q('#rIni').value || cur, det = q('#rDet').value.trim();
@@ -1641,13 +1640,14 @@ function sheetRec(rc, tipoIni){
       if (tras && (q('#rDesde').value === q('#rHacia').value)){ err.textContent = 'Elige dos cuentas distintas.'; return; }
       const doc = {...(rc ? strip(rc) : {omitidos:[], creado:new Date().toISOString()}), tipo:st.tipo, detalle:det, importe:r2(imp), dia, inicio:ini, activo: edit ? q('#rAct').checked : true, variable: st.tipo === 'ingreso' && q('#rVar').checked,
         cat: tras ? null : q('#rCat').value, cuenta: tras ? null : q('#rCta').value, desde: tras ? q('#rDesde').value : null, hacia: tras ? q('#rHacia').value : null};
-      const om = new Set(rc?.omitidos || []); if (q('#rSkip')){ if (q('#rSkip').checked) om.add(cur); else om.delete(cur); } doc.omitidos = [...om];
-      const id = rc?.id || uid('r');
+      /* Si el día de este mes aún no ha llegado, este mes se anota ese día (aunque antes hubieras borrado lo anotado) */
+      const id = rc?.id || uid('r'), f = fechaPago(cur, dia);
+      if (f > hoyISO()) doc.omitidos = (doc.omitidos || []).filter(x => x !== cur);
       closeSheet(); if (await guardar(async () => {
         await store.set('rec', id, doc);
-        /* El de este mes que ya se anotó solo: si lo saltas o lo pasas a un día que aún no ha llegado, se quita y vuelve a «Próximos pagos»; si lo pasas a otro día ya pasado, cambia de fecha */
-        const mv = edit && S.movs.find(m => m.id === `r-${id}-${cur}`), f = fechaPago(cur, dia);
-        if (mv){ if (om.has(cur) || f > hoyISO()) await store.del('mov', mv.id); else if (mv.fecha !== f) await store.set('mov', mv.id, {...strip(mv), fecha:f}); }
+        /* El de este mes que ya se anotó solo: si lo pasas a un día que aún no ha llegado, se quita y se vuelve a anotar ese día; si lo pasas a otro día ya pasado, cambia de fecha */
+        const mv = edit && S.movs.find(m => m.id === `r-${id}-${cur}`);
+        if (mv){ if (f > hoyISO()) await store.del('mov', mv.id); else if (mv.fecha !== f) await store.set('mov', mv.id, {...strip(mv), fecha:f}); }
       }, edit ? 'Fijo guardado' : 'Fijo añadido')) setTimeout(generarRecurrentes, 400);
     });
     const del = q('#rDel'); if (del) armar(del, 'Toca otra vez para eliminar', () => { closeSheet(); guardar(() => store.del('rec', rc.id), 'Fijo eliminado. Lo ya anotado se queda.'); });
