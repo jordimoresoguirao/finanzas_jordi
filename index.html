@@ -769,7 +769,14 @@ const deudasCtx = () => { const hoy = hoyISO(), o = {}; for (const d of S.deudas
 const ctx = () => ({recs:S.recs, plans:S.plans, cfg:S.cfg, deudas:deudasCtx(), realIng:(rc, ym) => rc.cat ? r2(S.movs.reduce((a,m) => a + (m.tipo === 'ingreso' && m.cat === rc.cat && mesDe(m) === ym ? m.importe : 0), 0)) : 0, estVar:Object.fromEntries(S.recs.filter(r => r.variable && r.tipo === 'ingreso').map(r => [r.id, estNomina(r).v])), huchas:huchasGasto()});
 const saldo = c => saldoCuenta(c, S.movs, S.cfg?.sobre, hoyISO());
 const ordenCuentas = () => [...S.cuentas].sort((a,b) => (ORD[a.tipo]??9) - (ORD[b.tipo]??9) || (a.orden||0) - (b.orden||0) || a.nombre.localeCompare(b.nombre));
-const primerMes = () => S.movs.reduce((a,m) => { const y = ymOf(m.fecha); return !a || y < a ? y : a; }, null);
+/* Mes desde el que cuenta la app: lo anterior no sale en Análisis, Futuro, Movimientos ni Patrimonio, aunque sigue guardado.
+   Si no está puesto: el mes en que pusiste los saldos o, si fue a mitad de mes, el siguiente. */
+function inicioDerivado(){
+  const b = S.cuentas.map(c => c.fechaBase).filter(Boolean).sort()[0]; if (!b) return ymOf(hoyISO());
+  return Number(b.slice(8)) > 1 ? addMonths(ymOf(b), 1) : ymOf(b);
+}
+const inicioApp = () => { const i = S.cfg?.inicio || inicioDerivado(), cur = ymOf(hoyISO()); return i > cur ? cur : i; };
+const primerMes = () => { const m = S.movs.reduce((a,m) => { const y = ymOf(m.fecha); return !a || y < a ? y : a; }, null), i = inicioApp(); return m && m > i ? m : i; };
 const ipcAnual = () => Number(S.cfg?.ipc ?? IPC_DEF) || 0;
 const ipcMes = () => Math.pow(1 + ipcAnual()/100, 1/12) - 1;
 function porMesCat(){ const o = {}; for (const m of S.movs){ if (m.tipo !== 'gasto') continue; const y = mesDe(m), k = m.cat||'_'; (o[y] ||= {})[k] = ((o[y]||{})[k]||0) + m.importe; } return o; }
@@ -840,6 +847,8 @@ function after(){
   schedule();
   if (S.cfg && !S.generado && S.def.cfg && S.def.rec && S.def.mov){ S.generado = true; generarRecurrentes(); }
   if (S.cfg && S.def.mov && !S.carteraLista){ S.carteraLista = true; setTimeout(abrirDesdeCartera, 80); }
+  /* La primera vez, deja guardado el mes de inicio para que no cambie con el tiempo */
+  if (S.cfg && !S.cfg.inicio && S.def.cfg && S.def.cuentas && S.cuentas.length && !S.inicioFijado){ S.inicioFijado = true; store.setCfg({...S.cfg, inicio:inicioDerivado()}).catch(e => console.warn(e)); }
 }
 function subscribe(){
   const db = CAPS.db;
@@ -856,7 +865,7 @@ async function generarRecurrentes(){
   if (S.generando){ S.genOtra = true; return; }
   S.generando = true;
   try {
-    const hoy = hoyISO(), cur = ymOf(hoy), min = addMonths(cur, -2);
+    const hoy = hoyISO(), cur = ymOf(hoy), min = [addMonths(cur, -2), inicioApp()].sort()[1];
     for (const rc of [...S.recs]){
       if (rc.activo === false || rc.variable || !(rc.importe > 0)) continue;
       for (let ym = rc.inicio && rc.inicio > min ? rc.inicio : min; ym <= cur; ym = addMonths(ym, 1)){
@@ -891,6 +900,13 @@ function render(){
   const mc = view.querySelector('.mchips'); if (mc){ const on = mc.querySelector('[aria-pressed="true"]'); if (on){ mc.style.scrollBehavior = 'auto'; mc.scrollLeft = Math.max(0, on.offsetLeft - mc.clientWidth + on.offsetWidth + 40); mc.style.scrollBehavior = ''; } }
   wirePchart();
   if (!$('#sheet').hidden && S.sheetKind){ const b = $('#sheetBody'); if (S.sheetKind === 'fijos') b.innerHTML = fijosHTML(); else if (S.sheetKind.startsWith('grupo:')) b.innerHTML = grupoHTML(S.sheetKind.slice(6)); }
+}
+
+/* El sobre de esta semana. Si pusiste el saldo de la tarjeta a mitad de semana (como al empezar), lo que queda es lo que hay en la tarjeta */
+function sobreSemana(hoy){
+  const sb = S.cfg.sobre, e = estadoSobre(sb, S.movs, hoy), t = S.cuentas.find(c => c.id === sb.cuenta);
+  if (!(t && t.fechaBase && t.fechaBase > e.ini)) return {...e, aMitad:false};
+  const queda = saldo(t); return {...e, queda, porDia: queda > 0 && e.diasRest > 0 ? r2(queda/e.diasRest) : 0, aMitad:true};
 }
 
 /* Iconos (trazo, 24×24) */
@@ -1034,19 +1050,19 @@ function vHero(hoy){
   const sb = S.cfg.sobre, haySobre = sb.importe > 0 && sb.cuenta, modo = haySobre ? (S.hero || 'semana') : 'mes';
   const seg = haySobre ? `<div class="hseg" role="group" aria-label="Periodo"><button data-act="hero" data-v="semana" aria-pressed="${modo === 'semana'}">Semana</button><button data-act="hero" data-v="mes" aria-pressed="${modo === 'mes'}">Mes</button></div>` : `<p class="hero-cap">${mesNombre(ymOf(hoy))}</p>`;
   if (modo === 'semana'){
-    const e = estadoSobre(sb, S.movs, hoy), over = e.queda < 0, idx = diffDays(e.ini, hoy);
+    const e = sobreSemana(hoy), over = e.queda < 0, idx = diffDays(e.ini, hoy);
     return `<section class="hero ${over ? 'is-over' : ''}" aria-label="Sobre de esta semana">
       <div class="hero-top">${seg}<p class="hero-r">${e.diasRest === 1 ? 'Mañana recargas' : `Quedan ${e.diasRest} días`}</p></div>
-      <p class="hero-k">${over ? 'Te has pasado esta semana' : 'Te queda esta semana'}</p>
+      <p class="hero-k">${over ? 'Te has pasado esta semana' : e.aMitad ? 'Te queda en la tarjeta' : 'Te queda esta semana'}</p>
       <p class="hero-big">${eur(over ? -e.queda : e.queda)}</p>
-      <p class="hero-sub">${over ? `Por encima de los ${eur(e.disponible)} del sobre. Hasta el ${DIAS[sb.dia]}, lo que gastes sale de otro sitio.` : e.queda > 0 ? `Unos ${eur(e.porDia)} al día hasta el ${DIAS[sb.dia]}` : 'Sobre gastado. Recargas el ' + DIAS[sb.dia] + '.'}</p>
+      <p class="hero-sub">${e.aMitad && !over ? `${e.queda > 0 ? `Unos ${eur(e.porDia)} al día hasta el ${DIAS[sb.dia]}. ` : `El ${DIAS[sb.dia]} recargas ${eur(sb.importe)}. `}Esta semana cuenta lo que hay en la tarjeta, porque pusiste su saldo a mitad de semana.` : over ? `Por encima de los ${eur(e.disponible)} del sobre. Hasta el ${DIAS[sb.dia]}, lo que gastes sale de otro sitio.` : e.queda > 0 ? `Unos ${eur(e.porDia)} al día hasta el ${DIAS[sb.dia]}` : 'Sobre gastado. Recargas el ' + DIAS[sb.dia] + '.'}</p>
       ${timeline(7, idx, fechaCorta(e.ini).replace(/ \w+$/, ''), fechaCorta(e.fin).replace(/ \w+$/, ''), `Hoy · ${DIAS_C[fromISO(hoy).getDay()]}`)}
       <div class="hero-foot"><span>Sobre<b>${eur(e.disponible)}</b></span><span>Gastado<b>${eur(-e.gastado)}</b></span></div>
       ${heroExtra(sb, e)}
     </section>`;
   }
   const ym = ymOf(hoy), r = resumenMes(ym, S.movs, ctasMap()), dia = Number(hoy.slice(8)), dRest = diasMes(ym) - dia;
-  const tq = r2(r.ing - r.gas), pp = porPagar(ym, hoy), eS = haySobre ? estadoSobre(sb, S.movs, hoy) : null, libre = r2(tq - pp.total - (eS ? Math.max(eS.queda, 0) : 0));
+  const tq = r2(r.ing - r.gas), pp = porPagar(ym, hoy), eS = haySobre ? sobreSemana(hoy) : null, libre = r2(tq - pp.total - (eS ? Math.max(eS.queda, 0) : 0));
   const mc = MESES_C[Number(ym.slice(5)) - 1];
   return `<section class="hero ${tq < 0 ? 'is-over' : ''}" aria-label="Este mes">
     <div class="hero-top">${seg}<p class="hero-r">${dRest === 0 ? 'Último día' : dRest === 1 ? 'Queda 1 día' : `Quedan ${dRest} días`}</p></div>
@@ -1078,7 +1094,7 @@ function vAvisos(hoy){
   return `<section class="card"><div class="card-h"><h2>Avisos</h2><button class="link" data-act="tab" data-tab="analisis">Ver más ${ic('arrowr', 16, 2.2)}</button></div>${readsHTML(L)}</section>`;
 }
 function vUltimos(){
-  const l = S.movs.slice(0, 5);
+  const ini = inicioApp() + '-01', l = S.movs.filter(m => m.fecha >= ini).slice(0, 3);
   return `<section class="card"><div class="card-h"><h2>Últimos movimientos</h2>${l.length ? `<button class="link" data-act="ver-movs">Ver todos ${ic('arrowr', 16, 2.2)}</button>` : ''}</div>${l.length ? `<div class="rows">${l.map(m => movRow(m, {fecha:true})).join('')}</div>` : '<p class="muted">Aún no has anotado nada. Toca el botón + para apuntar tu primer gasto.</p>'}</section>`;
 }
 function proxRow(x, hoy){
@@ -1086,7 +1102,7 @@ function proxRow(x, hoy){
   return `<div class="row">${icoCat(x.cat, ing ? 'in' : '')}<span class="r-main"><span class="r-t">${esc(x.nombre)}</span><span class="r-s">${cuando}</span></span><span class="r-v ${ing ? 'pos' : ''}">${x.aprox ? '≈ ' : ''}${ing ? eur(x.importe, {signo:true}) : eur(-x.importe)}</span></div>`;
 }
 function vProximos(hoy){
-  const l = proximos(hoy).slice(0, 5);
+  const l = proximos(hoy).slice(0, 3);
   return `<section class="card"><div class="card-h"><h2>Próximos pagos</h2><button class="link" data-act="fijos">Ver todos ${ic('arrowr', 16, 2.2)}</button></div>${l.length ? `<div class="rows">${l.map(x => proxRow(x, hoy)).join('')}</div>` : '<p class="muted">Nada en las próximas semanas. Añade tus fijos para verlos aquí.</p>'}</section>`;
 }
 function vStbyMini(){
@@ -1116,7 +1132,7 @@ async function cerrarIrpf(ids, mover){
 /* ----- Movimientos ----- */
 function vMovimientos(){
   if (!S.cfg) return vSinCfg('Movimientos');
-  const hoy = hoyISO(), cur = ymOf(hoy), ym = S.mes || cur, q = S.q.trim().toLowerCase(), cm = ctasMap(), min = ymOf(ventana()), max = addMonths(cur, 1);
+  const hoy = hoyISO(), cur = ymOf(hoy), ym = S.mes || cur, q = S.q.trim().toLowerCase(), cm = ctasMap(), min = [ymOf(ventana()), inicioApp()].sort()[1], max = addMonths(cur, 1);
   /* Lo cobrado o pagado este mes, y lo que cuenta en este mes aunque tenga otra fecha (la nómina del mes siguiente sale en los dos) */
   const enMes = S.movs.filter(m => mesDe(m) === ym || ymOf(m.fecha) === ym);
   const hay = m => [m.detalle, catNombre(m.cat), ctaNombre(m.cuenta), ctaNombre(m.desde), ctaNombre(m.hacia), TIPO_L[m.tipo]].join(' ').toLowerCase();
@@ -1171,8 +1187,8 @@ function patData(){
 /* Patrimonio en una fecha pasada (desde que pusiste los saldos) y previsto a 12 meses */
 function nwEn(f){
   let v = 0;
-  for (const c of S.cuentas) if (!c.fechaBase || c.fechaBase <= f) v += saldoCuenta(c, S.movs, S.cfg.sobre, f);
-  for (const d of S.deudas) if (!d.fechaCapital || d.fechaCapital <= f) v -= estadoDeuda(d, S.movs, f).pendiente;
+  for (const c of S.cuentas) v += !c.fechaBase || c.fechaBase <= f ? saldoCuenta(c, S.movs, S.cfg.sobre, f) : (Number(c.saldoBase) || 0);
+  for (const d of S.deudas) v -= !d.fechaCapital || d.fechaCapital <= f ? estadoDeuda(d, S.movs, f).pendiente : (Number(d.capital) || 0);
   for (const t of S.stby) if (t.fecha <= f && !(t.cobrado && t.fechaCobro && t.fechaCobro <= f)) v += t.cobrar;
   return r2(v);
 }
@@ -1184,12 +1200,12 @@ function restoMes(hoy){
     if (rc.variable){ const p = esperada(rc, hoy); if (ymOf(p.exp) === ym) ing += estNomina(rc).v; continue; }
     const f = fechaPago(ym, rc.dia); if (f > hoy && !S.movs.some(m => m.id === `r-${rc.id}-${ym}`)) ing += rc.importe;
   }
-  const semana = sb.importe > 0 && sb.cuenta ? Math.max(estadoSobre(sb, S.movs, hoy).queda, 0) : 0;
+  const semana = sb.importe > 0 && sb.cuenta ? Math.max(sobreSemana(hoy).queda, 0) : 0;
   return r2(ing + h.plIng - h.plGas - pp.total - semana);
 }
 function patSerie(neto){
   const hoy = hoyISO(), bases = S.cuentas.map(c => c.fechaBase).filter(Boolean).sort();
-  const ini = bases[0] && bases[0] < hoy ? bases[0] : hoy, real = [];
+  const desde = [bases[0] || hoy, inicioApp() + '-01'].sort()[1], ini = desde < hoy ? desde : hoy, real = [];
   for (let f = ini; f < hoy; f = addDays(f, 7)) real.push({f, v:nwEn(f)});
   real.push({f:hoy, v:neto});
   const {rows} = proyeccion(false), prin = {};
@@ -1273,17 +1289,18 @@ function vObjetivos(){
 function lecturas(ym, cur, hoy){
   const L = [], add = (nivel, html) => L.push({nivel, html}); const sb = S.cfg.sobre;
   if (ym === cur && sb.importe > 0 && sb.cuenta){
-    const e = estadoSobre(sb, S.movs, hoy);
+    const e = sobreSemana(hoy);
     if (e.queda < 0) add('alerta', `Esta semana llevas <b>${eur(-e.queda)}</b> por encima del sobre. Hasta el ${DIAS[sb.dia]}, lo que gastes sale de otro sitio.`);
     else if (e.disponible > 0 && e.gastado/e.disponible > .8 && e.diasRest > 2) add('aviso', `Llevas el ${pct(e.gastado/e.disponible)} del sobre y quedan ${e.diasRest} días: ${eur(e.porDia)} al día.`);
   }
   const r = resumenMes(ym, S.movs, ctasMap());
   if (r.sacado > 0) add('alerta', `En ${mesNombre(ym)} has sacado <b>${eur(r.sacado)}</b> de ahorros (${esc(Object.entries(r.sacadoDe).map(([n,v]) => `${n}: ${eur(v,{dec:0})}`).join(', '))}).`);
-  const h = habitualMes(ym, ctx()), prev = h.gas + h.plGas;
-  if (ym === cur && prev > 0 && r.gas > 0){
-    const pg = r.gas/prev, pm = Number(hoy.slice(8))/diasMes(cur);
-    if (pg > pm + .1) add('alerta', `Llevas el ${pct(pg)} del gasto previsto y el mes va por el ${pct(pm)}.`);
-    else add('ok', `Vas a ritmo: ${pct(pg)} del gasto previsto con el mes al ${pct(pm)}.`);
+  /* Ritmo del gasto del día a día (sin fijos, STBY ni lo que pagas desde huchas) frente a lo que da el sobre en el mes */
+  const cmL = ctasMap(), h = habitualMes(ym, ctx()), prev = h.sobre, diaDia = r2(S.movs.reduce((a,m) => a + (m.tipo === 'gasto' && !m.rec && !m.stby && cmL[m.cuenta]?.tipo !== 'hucha' && mesDe(m) === ym ? m.importe : 0), 0));
+  if (ym === cur && prev > 0 && diaDia > 0){
+    const pg = diaDia/prev, pm = Number(hoy.slice(8))/diasMes(cur);
+    if (pg > pm + .1) add('alerta', `En el día a día llevas ${eur(diaDia, {dec:0})}, el ${pct(pg)} de lo que da el sobre este mes, y el mes va por el ${pct(pm)}.`);
+    else add('ok', `Vas a ritmo: en el día a día llevas el ${pct(pg)} de lo que da el sobre, con el mes al ${pct(pm)}.`);
   }
   const pmc = porMesCat(), first = primerMes() || ym; let n = 0;
   for (const c of S.cfg.categorias){ if (c.tipo !== 'gasto' || !(c.presupuesto > 0)) continue; const g = r.porCat[c.id]||0; if (g <= c.presupuesto + .005) continue;
@@ -1306,7 +1323,7 @@ function lecturas(ym, cur, hoy){
 function vAnalisis(){
   if (!S.cfg) return vSinCfg('Análisis');
   const hoy = hoyISO(), cur = ymOf(hoy), modo = S.ana || 'gastos', ym = S.mes || cur;
-  const meses = []; for (let k = 9; k >= -1; k--) meses.push(addMonths(cur, -k));
+  const meses = [], ini = inicioApp(); for (let k = 9; k >= -1; k--){ const m = addMonths(cur, -k); if (m >= ini) meses.push(m); }
   const mch = modo === 'futuro' ? '' : `<div class="mchips" role="group" aria-label="Mes">${meses.map(m => `<button data-act="setmes" data-v="${m}" aria-pressed="${m === ym}">${MESES_C[Number(m.slice(5)) - 1]}${m.slice(0, 4) !== cur.slice(0, 4) ? ` ${m.slice(2, 4)}` : ''}</button>`).join('')}</div>`;
   const seg = `<div class="seg" role="group" aria-label="Qué ver">${[['gastos','Gastos'],['ingresos','Ingresos'],['futuro','Futuro']].map(([v,l]) => `<button data-act="ana" data-v="${v}" aria-pressed="${modo === v}">${l}</button>`).join('')}</div>`;
   const body = modo === 'futuro' ? vFuturo() : modo === 'ingresos' ? vAnaIngresos(ym, cur, hoy) : vAnaGastos(ym, cur, hoy);
@@ -1439,6 +1456,7 @@ function vAjustes(){
      ${row('sheet-cats', 'Categorías y presupuesto', conP.length ? `${conP.length} con presupuesto · ${eur(totP, {dec:0})} al mes` : 'Sin presupuesto todavía')}
      ${row('fijos', 'Fijos de cada mes', `${S.recs.length} ${S.recs.length === 1 ? 'fijo' : 'fijos'}`)}
      ${row('stby', 'STBY', stbyResumenTxt())}
+     ${row('inicio-app', 'La app cuenta desde', 'Lo anterior no sale en Análisis, Futuro ni Patrimonio', cap(mesAnyo(inicioApp())))}
      ${row('cartera', 'Pagos con la Cartera del iPhone', 'Al pagar con el móvil, se abre el gasto ya relleno')}
    </div></section>
    <section class="card"><h2>Tus datos</h2><div>
@@ -1597,6 +1615,7 @@ function sheetRec(rc, tipoIni){
     <div class="grid2" id="rTrasW"><div class="fld"><label for="rDesde">Desde</label><select id="rDesde">${optsCuentas()}</select></div><div class="fld"><label for="rHacia">Hacia</label><select id="rHacia">${optsCuentas(true)}</select></div></div>
     <div class="grid2"><div class="fld"><label for="rDia" id="rDiaL">Día del mes</label><input id="rDia" type="number" inputmode="numeric" min="1" max="31" value="${rc?.dia || ''}" placeholder="1" ${esDeuda ? 'readonly' : ''}></div><div class="fld"><label for="rIni">Empieza en</label><input id="rIni" type="month" value="${esc(rc?.inicio || cur)}" placeholder="${cur}"></div></div>
     ${edit ? `<label class="check"><input type="checkbox" id="rAct" ${rc.activo !== false ? 'checked' : ''}><span>Activo</span></label>` : ''}
+    ${edit && !esDeuda ? `<label class="check"><input type="checkbox" id="rSkip" ${(rc.omitidos||[]).includes(cur) ? 'checked' : ''}><span>Este mes (${mesNombre(cur)}) no lo pago</span></label>` : ''}
     <p class="note" id="rNote"></p>
     ${actions(edit)}${edit ? '<button type="button" class="btn danger" id="rDel">Eliminar fijo</button>' : ''}</form>`, root => {
     const q = s => root.querySelector(s);
@@ -1609,6 +1628,8 @@ function sheetRec(rc, tipoIni){
     setSel(q('#rCta'), rc?.cuenta || S.cfg.cuentaPrincipal); setSel(q('#rDesde'), rc?.desde || S.cfg.cuentaPrincipal); setSel(q('#rHacia'), rc?.hacia || S.cuentas.find(c => c.tipo === 'inversion' || c.tipo === 'hucha')?.id);
     q('.seg')?.addEventListener('click', e => { const b = e.target.closest('button'); if (b){ st.tipo = b.dataset.t; q('#rCat').innerHTML = ''; sync(); } });
     q('#rVar').addEventListener('change', syncVar);
+    /* Si lo mueves a un día de este mes que aún no ha llegado, deja de estar saltado */
+    q('#rDia').addEventListener('input', () => { const d = Math.round(Number(q('#rDia').value)); if (q('#rSkip') && d >= 1 && d <= 31 && fechaPago(cur, d) > hoyISO()) q('#rSkip').checked = false; });
     sync();
     q('#fRec').addEventListener('submit', async e => {
       e.preventDefault(); const err = q('.err'); const imp = parseImporte(q('#rImp').value), dia = Math.round(Number(q('#rDia').value)), ini = q('#rIni').value || cur, det = q('#rDet').value.trim();
@@ -1620,7 +1641,14 @@ function sheetRec(rc, tipoIni){
       if (tras && (q('#rDesde').value === q('#rHacia').value)){ err.textContent = 'Elige dos cuentas distintas.'; return; }
       const doc = {...(rc ? strip(rc) : {omitidos:[], creado:new Date().toISOString()}), tipo:st.tipo, detalle:det, importe:r2(imp), dia, inicio:ini, activo: edit ? q('#rAct').checked : true, variable: st.tipo === 'ingreso' && q('#rVar').checked,
         cat: tras ? null : q('#rCat').value, cuenta: tras ? null : q('#rCta').value, desde: tras ? q('#rDesde').value : null, hacia: tras ? q('#rHacia').value : null};
-      closeSheet(); if (await guardar(() => store.set('rec', rc?.id || uid('r'), doc), edit ? 'Fijo guardado' : 'Fijo añadido')) setTimeout(generarRecurrentes, 400);
+      const om = new Set(rc?.omitidos || []); if (q('#rSkip')){ if (q('#rSkip').checked) om.add(cur); else om.delete(cur); } doc.omitidos = [...om];
+      const id = rc?.id || uid('r');
+      closeSheet(); if (await guardar(async () => {
+        await store.set('rec', id, doc);
+        /* El de este mes que ya se anotó solo: si lo saltas o lo pasas a un día que aún no ha llegado, se quita y vuelve a «Próximos pagos»; si lo pasas a otro día ya pasado, cambia de fecha */
+        const mv = edit && S.movs.find(m => m.id === `r-${id}-${cur}`), f = fechaPago(cur, dia);
+        if (mv){ if (om.has(cur) || f > hoyISO()) await store.del('mov', mv.id); else if (mv.fecha !== f) await store.set('mov', mv.id, {...strip(mv), fecha:f}); }
+      }, edit ? 'Fijo guardado' : 'Fijo añadido')) setTimeout(generarRecurrentes, 400);
     });
     const del = q('#rDel'); if (del) armar(del, 'Toca otra vez para eliminar', () => { closeSheet(); guardar(() => store.del('rec', rc.id), 'Fijo eliminado. Lo ya anotado se queda.'); });
   });
@@ -1795,6 +1823,20 @@ function sheetSobre(){
       const nuevo = {...c, sobre:{importe:r2(imp), dia:Number(q('#sbDia').value), cuenta:q('#sbCta').value, origen:q('#sbOri').value}};
       closeSheet(); guardar(() => store.setCfg(nuevo), 'Sobre guardado');
     });
+  });
+}
+
+/* Mes desde el que cuenta la app */
+function sheetInicio(){
+  const cur = ymOf(hoyISO());
+  openSheet('La app cuenta desde', `<form id="fIni" class="form" novalidate>
+    <p class="lead">Los meses de antes no salen en Análisis, Futuro, Movimientos ni Patrimonio, pero siguen guardados. Si un día anotas meses anteriores, pon aquí el primero que quieras ver.</p>
+    <div class="fld"><label for="iMes">Primer mes</label><input id="iMes" type="month" value="${inicioApp()}" max="${cur}" placeholder="${cur}"></div>
+    ${actions(true)}</form>`, root => {
+    const q = x => root.querySelector(x);
+    q('#fIni').addEventListener('submit', e => { e.preventDefault(); const v = q('#iMes').value;
+      if (!isYM(v)){ q('.err').textContent = 'Escribe el mes como 2026-11.'; return; } if (v > cur){ q('.err').textContent = 'Tiene que ser este mes o uno anterior.'; return; }
+      closeSheet(); S.mes = null; guardar(() => store.setCfg({...S.cfg, inicio:v}), 'Guardado'); });
   });
 }
 
@@ -2193,7 +2235,7 @@ function sheetSetup(){
           for (const m of [...S.movs]){ const nv = {}; for (const k of ['cuenta','desde','hacia']) if (m[k] && mapa[m[k]]) nv[k] = mapa[m[k]]; if (Object.keys(nv).length) await store.set('mov', m.id, {...strip(m), ...nv}); }
           await store.delMeta();
         }
-        await store.setCfg({nombre:'Jordi', categorias:cats, cuentaPrincipal:ppal, sueldo:{pagas:SU.pagas, extra: SU.pagas === 14 ? r2(parseImporte(q('#suExtra').value) || 0) : 0, meses:[6,12]},
+        await store.setCfg({nombre:'Jordi', inicio:cur, categorias:cats, cuentaPrincipal:ppal, sueldo:{pagas:SU.pagas, extra: SU.pagas === 14 ? r2(parseImporte(q('#suExtra').value) || 0) : 0, meses:[6,12]},
           sobre:{importe:r2(sobre), dia:Number(q('#suSobreDia').value), cuenta:idOf[q('#suSobreCta').value] || '', origen:idOf[q('#suSobreOri').value] || ''}, ipc:IPC_DEF, creado:now()});
       }, 'Listo. Ya puedes anotar tus gastos.');
       if (ok){ closeSheet(); S.tab = 'inicio'; window.scrollTo(0,0); schedule(); setTimeout(generarRecurrentes, 500); }
@@ -2468,6 +2510,7 @@ const ACT = {
   stby: () => ir('stby', true),
   'new-stby': () => S.cfg ? sheetStby() : sheetSetup(),
   'edit-stby': b => { const t = S.stby.find(x => x.id === b.dataset.id); if (t) sheetStby(t); },
+  'inicio-app': () => sheetInicio(),
   'cobrar-stby': b => sheetCobro(String(b.dataset.ids || '').split(',')),
   'irpf-si': b => cerrarIrpf(String(b.dataset.ids || '').split(','), true), 'irpf-no': b => cerrarIrpf(String(b.dataset.ids || '').split(','), false),
   setup: () => sheetSetup(),
