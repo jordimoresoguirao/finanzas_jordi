@@ -468,7 +468,8 @@ details.editbox>summary{cursor:pointer;font-weight:700;color:var(--accent);margi
 .lock-pad{display:grid;grid-template-columns:repeat(3,76px);gap:16px 26px}
 .lock-pad button{width:76px;height:76px;border-radius:50%;background:rgba(255,255,255,.1);color:var(--hero-ink);font-size:27px;font-weight:600;display:grid;place-items:center;text-align:center;font-variant-numeric:tabular-nums}
 .lock-pad button:active{background:rgba(255,255,255,.24)}
-.lock-pad button.del{background:transparent}
+.lock-pad button.del,.lock-pad button.fid{background:transparent}
+.lock-pad button.fid.off{visibility:hidden}
 .lock-pad button:disabled{opacity:.35}
 body.locked{overflow:hidden}
 @media (max-height:640px){ .lock-pad{gap:10px 22px} .lock-pad button{width:66px;height:66px;font-size:23.5px} .lock-dots{margin:20px 0 24px} }
@@ -489,7 +490,7 @@ body.locked{overflow:hidden}
     <p class="lock-s" id="lockS" aria-live="polite">Introduce tu código</p>
     <div class="lock-dots" id="lockDots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
     <div class="lock-pad" role="group" aria-label="Teclado del código">
-      <button type="button" data-act="pin" data-k="1">1</button><button type="button" data-act="pin" data-k="2">2</button><button type="button" data-act="pin" data-k="3">3</button><button type="button" data-act="pin" data-k="4">4</button><button type="button" data-act="pin" data-k="5">5</button><button type="button" data-act="pin" data-k="6">6</button><button type="button" data-act="pin" data-k="7">7</button><button type="button" data-act="pin" data-k="8">8</button><button type="button" data-act="pin" data-k="9">9</button><span></span><button type="button" data-act="pin" data-k="0">0</button><button type="button" class="del" data-act="pin-del" aria-label="Borrar"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5h10.5A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5H9l-6-7z"/><path d="m12.5 9.5 5 5M17.5 9.5l-5 5"/></svg></button>
+      <button type="button" data-act="pin" data-k="1">1</button><button type="button" data-act="pin" data-k="2">2</button><button type="button" data-act="pin" data-k="3">3</button><button type="button" data-act="pin" data-k="4">4</button><button type="button" data-act="pin" data-k="5">5</button><button type="button" data-act="pin" data-k="6">6</button><button type="button" data-act="pin" data-k="7">7</button><button type="button" data-act="pin" data-k="8">8</button><button type="button" data-act="pin" data-k="9">9</button><button type="button" class="fid off" id="lockFid" data-act="pin-fid" aria-label="Entrar con Face ID"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.5 15.5c1.4 1.1 3.6 1.1 5 0"/></svg></button><button type="button" data-act="pin" data-k="0">0</button><button type="button" class="del" data-act="pin-del" aria-label="Borrar"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5h10.5A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5H9l-6-7z"/><path d="m12.5 9.5 5 5M17.5 9.5l-5 5"/></svg></button>
     </div>
   </div>
 </div>
@@ -1460,6 +1461,10 @@ function vAjustes(){
      ${row('inicio-app', 'La app cuenta desde', 'Lo anterior no sale en Análisis, Futuro ni Patrimonio', cap(mesAnyo(inicioApp())))}
      ${row('cartera', 'Pagos con la Cartera del iPhone', 'Al pagar con el móvil, se abre el gasto ya relleno')}
    </div></section>
+   <section class="card"><h2>Seguridad</h2><div>
+     ${row('codigo', 'Código de acceso', pinActual() ? 'Lo pide al abrir la app' : 'La app se abre sin pedir nada', pinActual() ? 'Activado' : 'Desactivado')}
+     ${row('faceid', 'Entrar con Face ID', 'Con el código de reserva', faceIdActual() ? 'Activado' : 'Desactivado')}
+   </div><p class="muted">El código y Face ID se guardan solo en este dispositivo.</p></section>
    <section class="card"><h2>Tus datos</h2><div>
      ${S.mode === 'local' ? row('github', 'Guardar en GitHub', syncResumen()) : ''}
      ${row('export-csv', 'Exportar movimientos', 'CSV para abrir en Excel')}
@@ -1823,6 +1828,55 @@ function sheetSobre(){
       const nuevo = {...c, sobre:{importe:r2(imp), dia:Number(q('#sbDia').value), cuenta:q('#sbCta').value, origen:q('#sbOri').value}};
       closeSheet(); guardar(() => store.setCfg(nuevo), 'Sobre guardado');
     });
+  });
+}
+
+/* Código de acceso: activar, cambiar o desactivar (pide el actual) */
+const campoPin = (id, label) => `<div class="fld"><label for="${id}">${label}</label><input id="${id}" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="${LARGO_PIN}" autocomplete="off" placeholder="••••••"></div>`;
+function sheetCodigo(modo){
+  const pin = pinActual(), fid = !!faceIdActual();
+  if (!modo) return openSheet('Código de acceso', `<div class="form">
+    <p class="lead">${pin ? `La app pide tu código de ${LARGO_PIN} cifras al abrirla y al volver después de un minuto fuera.` : 'Ahora la app se abre sin pedir nada.'} Se guarda solo en este dispositivo.</p>
+    ${pin ? '<button type="button" class="btn primary" data-act="codigo-cambiar">Cambiar el código</button><button type="button" class="btn ghost" data-act="codigo-quitar">Desactivar el código</button>' : '<button type="button" class="btn primary" data-act="codigo-poner">Activar el código</button>'}</div>`);
+  const pide = modo !== 'poner' && !!pin, nuevo = modo !== 'quitar';
+  openSheet(modo === 'cambiar' ? 'Cambiar el código' : modo === 'quitar' ? 'Desactivar el código' : 'Activar el código', `<form id="fCod" class="form" novalidate>
+    ${pide ? campoPin('cAct', 'Código actual') : ''}
+    ${nuevo ? campoPin('cNue', `Código nuevo (${LARGO_PIN} números)`) + campoPin('cRep', 'Repite el código nuevo') : ''}
+    ${modo === 'quitar' ? `<p class="note">Sin código, cualquiera que coja tu móvil desbloqueado podrá abrir la app.${fid ? ' Face ID también se desactiva, porque necesita el código como llave de reserva.' : ''}</p>` : ''}
+    ${actions(true, modo === 'cambiar' ? 'Cambiar' : modo === 'quitar' ? 'Desactivar' : 'Activar')}</form>`, root => {
+    const q = x => root.querySelector(x), err = q('.err'), val = id => (q('#' + id)?.value || '').trim();
+    setTimeout(() => q('input')?.focus(), 80);
+    q('#fCod').addEventListener('submit', async e => {
+      e.preventDefault(); err.textContent = '';
+      const re = new RegExp(`^\\d{${LARGO_PIN}}$`);
+      try {
+        if (pide && (!re.test(val('cAct')) || await huellaPin(val('cAct'), pin) !== pin.huella)){ err.textContent = 'El código actual no es correcto.'; return; }
+        if (nuevo && !re.test(val('cNue'))){ err.textContent = `El código tiene que tener ${LARGO_PIN} números.`; return; }
+        if (nuevo && val('cNue') !== val('cRep')){ err.textContent = 'Los dos códigos nuevos no coinciden.'; return; }
+        const v = seguridad();
+        if (nuevo) v.pin = await nuevaHuella(val('cNue')); else { v.pin = null; v.faceid = null; }
+        guardarSeguridad(v);
+      } catch(e2){ console.warn(e2); err.textContent = window.crypto?.subtle ? errMsg(e2) : 'Para cambiar el código, abre la app desde su enlace https.'; return; }
+      closeSheet(); render(); toast(modo === 'cambiar' ? 'Código cambiado' : modo === 'quitar' ? 'Código desactivado' : 'Código activado');
+    });
+  });
+}
+/* Entrar con Face ID: activar, probar o desactivar */
+async function sheetFaceId(){
+  const disp = await faceIdDisponible(), pin = pinActual(), on = !!faceIdActual();
+  openSheet('Entrar con Face ID', `<div class="form">
+    <p class="lead">Entra en la app con Face ID en vez de escribir el código. El código sigue sirviendo si Face ID falla.</p>
+    ${!disp ? '<p class="note warn">Este dispositivo o este navegador no permite usar Face ID en la app. En el iPhone hace falta iOS 16 o posterior.</p>'
+      : !pin ? '<p class="note">Para usar Face ID, activa antes el código: es tu llave de reserva.</p><button type="button" class="btn primary" data-act="codigo-poner">Activar el código</button>'
+      : on ? '<p class="note good">Activado en este dispositivo.</p><button type="button" class="btn ghost" id="fidProbar">Probar Face ID</button><button type="button" class="btn danger" id="fidQuitar">Desactivar Face ID</button>'
+      : '<button type="button" class="btn primary" id="fidPoner">Activar Face ID</button><p class="note">El iPhone te pedirá Face ID y guardará una llave de acceso para esta app en tu llavero de iCloud.</p>'}
+    <p class="err" role="alert"></p></div>`, root => {
+    const q = x => root.querySelector(x), err = q('.err');
+    q('#fidPoner')?.addEventListener('click', async () => { err.textContent = '';
+      try { await activarFaceId(); } catch(e){ console.warn(e); err.textContent = e?.name === 'NotAllowedError' ? 'Se ha cancelado o no se ha podido usar Face ID.' : 'No se ha podido activar Face ID en este dispositivo.'; return; }
+      closeSheet(); render(); toast('Face ID activado'); });
+    q('#fidProbar')?.addEventListener('click', async () => { err.textContent = ''; let ok = false; try { ok = await pedirFaceId(); } catch(e){ console.warn(e); } if (ok) toast('Face ID funciona'); else err.textContent = 'Face ID no ha funcionado.'; });
+    q('#fidQuitar')?.addEventListener('click', () => { const v = seguridad(); v.faceid = null; try { guardarSeguridad(v); } catch {} closeSheet(); render(); toast('Face ID desactivado'); });
   });
 }
 
@@ -2529,7 +2583,8 @@ const ACT = {
   cartera: () => sheetCartera(),
   'anotar-nomina': b => { const rc = S.recs.find(x => x.id === b.dataset.id); if (!rc) return; const p = nominaPendiente(rc, hoyISO()) || {}; sheetMov(null, {tipo:'ingreso', cat:rc.cat, cuenta:rc.cuenta, detalle:rc.detalle || 'Nómina', nota: p.ult ? `La última fue de ${eur(p.ult.importe)}.` : `Tu estimación: unos ${eur(rc.importe, {dec:0})}.`}); },
   github: () => sheetGithub(), 'ya-datos': () => sheetYaDatos(),
-  pin: b => teclaPin(b.dataset.k), 'pin-del': () => borrarPin(),
+  pin: b => teclaPin(b.dataset.k), 'pin-del': () => borrarPin(), 'pin-fid': () => entrarFaceId(false),
+  codigo: () => sheetCodigo(), 'codigo-cambiar': () => sheetCodigo('cambiar'), 'codigo-quitar': () => sheetCodigo('quitar'), 'codigo-poner': () => sheetCodigo('poner'), faceid: () => sheetFaceId(),
   undo: () => { const u = toastUndo; toastUndo = null; $('#toast').hidden = true; if (u) u(); },
 };
 document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (!b || b.disabled) return; const f = ACT[b.dataset.act]; if (f){ e.preventDefault(); f(b, e); } });
@@ -2555,18 +2610,26 @@ window.addEventListener('online', () => programarSync(0));
 
 /* ===== Código de acceso ===== */
 /* Solo se guarda la huella del código (PBKDF2), no el número, porque el repositorio de la app es público.
-   Protege la pantalla: los datos siguen en el dispositivo y en el GitHub privado. */
-const PIN = {largo:6, iter:210000, sal:'becfb91da99516fcf3e04e912cbdb42b', huella:'f12665392549e0bf115ac8a8866f791b73de5c9f493524b6c40773b720989349'};
+   Protege la pantalla: los datos siguen en el dispositivo y en el GitHub privado.
+   El código y Face ID se guardan solo en este dispositivo; si no has cambiado nada, vale el código de siempre. */
+const LARGO_PIN = 6;
+const PIN_DEF = {iter:210000, sal:'becfb91da99516fcf3e04e912cbdb42b', huella:'f12665392549e0bf115ac8a8866f791b73de5c9f493524b6c40773b720989349'};
+const seguridad = () => { const v = local.leer('seguridad'); return v && typeof v === 'object' ? v : {pin:PIN_DEF, faceid:null}; };
+const guardarSeguridad = v => local.escribir('seguridad', v);
+const pinActual = () => seguridad().pin || null;
+/* Face ID solo vale con el código activado: el código es la llave de reserva */
+const faceIdActual = () => { const v = seguridad(); return v.pin && v.faceid ? v.faceid : null; };
 const BLOQUEO_MIN = 1;   /* vuelve a pedir el código si la app ha estado más de un minuto en segundo plano */
 const L = {codigo:'', comprobando:false, esperando:false, oculta:0, t:0};
 const bloqueada = () => !$('#lock').hidden;
 const fallosPin = () => local.leer('pin-fallos') || {n:0, hasta:0};
 const guardarFallosPin = f => { try { local.escribir('pin-fallos', f); } catch {} };
-async function huellaPin(codigo){
+const hexDe = u => [...new Uint8Array(u)].map(b => b.toString(16).padStart(2, '0')).join('');
+async function huellaPin(codigo, pin = pinActual()){
   const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(codigo), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({name:'PBKDF2', hash:'SHA-256', salt:Uint8Array.from(PIN.sal.match(/../g), h => parseInt(h, 16)), iterations:PIN.iter}, k, 256);
-  return [...new Uint8Array(bits)].map(b => b.toString(16).padStart(2, '0')).join('');
+  return hexDe(await crypto.subtle.deriveBits({name:'PBKDF2', hash:'SHA-256', salt:Uint8Array.from(pin.sal.match(/../g), h => parseInt(h, 16)), iterations:pin.iter}, k, 256));
 }
+async function nuevaHuella(codigo){ const pin = {iter:210000, sal:hexDe(crypto.getRandomValues(new Uint8Array(16)))}; return {...pin, huella:await huellaPin(codigo, pin)}; }
 function pintarLock(msg, err){
   $('#lockDots').querySelectorAll('i').forEach((d, i) => d.classList.toggle('on', i < L.codigo.length));
   const espera = Math.ceil((fallosPin().hasta - Date.now())/1000), st = $('#lockS');
@@ -2574,22 +2637,23 @@ function pintarLock(msg, err){
   else {
     if (L.esperando && msg === undefined) msg = '';
     L.esperando = false;
-    if (msg !== undefined){ st.textContent = msg || 'Introduce tu código'; st.classList.toggle('err', !!err); }
+    if (msg !== undefined){ st.textContent = msg || (faceIdActual() ? 'Usa Face ID o tu código' : 'Introduce tu código'); st.classList.toggle('err', !!err); }
   }
-  document.querySelectorAll('#lock .lock-pad button').forEach(b => b.disabled = espera > 0 || L.comprobando);
+  document.querySelectorAll('#lock .lock-pad button:not(.fid)').forEach(b => b.disabled = espera > 0 || L.comprobando);
   clearTimeout(L.t); if (espera > 0) L.t = setTimeout(() => pintarLock(), 1000);
 }
 function teclaPin(k){
-  if (L.comprobando || L.codigo.length >= PIN.largo || fallosPin().hasta > Date.now()) return;
+  if (L.comprobando || L.codigo.length >= LARGO_PIN || fallosPin().hasta > Date.now()) return;
   $('#lockDots').classList.remove('err', 'shake');
   L.codigo += k; pintarLock(L.codigo.length === 1 ? '' : undefined);
-  if (L.codigo.length === PIN.largo) comprobarPin();
+  if (L.codigo.length === LARGO_PIN) comprobarPin();
 }
 function borrarPin(){ if (L.comprobando) return; L.codigo = L.codigo.slice(0, -1); pintarLock(); }
 async function comprobarPin(){
   if (!window.crypto?.subtle){ L.codigo = ''; return pintarLock('Para entrar, abre la app desde su enlace https.', true); }
   L.comprobando = true; pintarLock();
-  let ok = false; try { ok = await huellaPin(L.codigo) === PIN.huella; } catch(e){ console.warn(e); }
+  const pin = pinActual(); if (!pin){ L.comprobando = false; return desbloquear(); }
+  let ok = false; try { ok = await huellaPin(L.codigo, pin) === pin.huella; } catch(e){ console.warn(e); }
   L.comprobando = false; L.codigo = '';
   if (ok){ guardarFallosPin(null); return desbloquear(); }
   /* A partir del quinto fallo seguido, espera: 30 s, 1 min, 2 min… hasta 15 min */
@@ -2598,7 +2662,40 @@ async function comprobarPin(){
   pintarLock('Código incorrecto', true);
 }
 const taparApp = on => { for (const sel of ['#view', '.nav', '#sheet', '#toast']){ const el = $(sel); if (el) el.inert = on; } document.body.classList.toggle('locked', on); };
-function bloquear(){ L.codigo = ''; $('#lockDots').classList.remove('err', 'shake'); $('#lock').hidden = false; taparApp(true); pintarLock(''); }
+function bloquear(){
+  if (!pinActual()) return desbloquear();   /* sin código, la app se abre sin pedir nada */
+  L.codigo = ''; $('#lockDots').classList.remove('err', 'shake'); $('#lock').hidden = false; taparApp(true);
+  $('#lockFid').classList.toggle('off', !faceIdActual()); pintarLock('');
+  if (faceIdActual()) setTimeout(() => entrarFaceId(true), 350);   /* lo intenta solo; si el iPhone pide un toque, queda el botón */
+}
+
+/* ===== Face ID (llave de acceso del dispositivo, WebAuthn) ===== */
+const b64u = {
+  a: buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  de: t => Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(t.length/4)*4, '=')), c => c.charCodeAt(0)),
+};
+async function faceIdDisponible(){ try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch { return false; } }
+async function activarFaceId(){
+  const nombre = S.cfg?.nombre || 'Jordi';
+  const cred = await navigator.credentials.create({publicKey:{rp:{name:'Contabilidad ' + nombre}, user:{id:crypto.getRandomValues(new Uint8Array(16)), name:nombre, displayName:'Contabilidad ' + nombre},
+    challenge:crypto.getRandomValues(new Uint8Array(32)), pubKeyCredParams:[{type:'public-key', alg:-7}, {type:'public-key', alg:-257}],
+    authenticatorSelection:{authenticatorAttachment:'platform', userVerification:'required', residentKey:'preferred'}, timeout:60000, attestation:'none'}});
+  const v = seguridad(); v.faceid = {id:b64u.a(cred.rawId), creado:new Date().toISOString()}; guardarSeguridad(v);
+}
+/* Pide Face ID con la llave de este dispositivo; vale si es esa llave y el iPhone ha comprobado que eres tú */
+async function pedirFaceId(){
+  const f = faceIdActual(); if (!f) return false;
+  const a = await navigator.credentials.get({publicKey:{challenge:crypto.getRandomValues(new Uint8Array(32)), allowCredentials:[{type:'public-key', id:b64u.de(f.id)}], userVerification:'required', timeout:60000}});
+  return !!a && b64u.a(a.rawId) === f.id && !!(new Uint8Array(a.response.authenticatorData)[32] & 0x04);
+}
+async function entrarFaceId(auto){
+  if (!faceIdActual() || !bloqueada() || L.faceid) return;
+  L.faceid = true; let ok = false;
+  try { ok = await pedirFaceId(); } catch(e){ console.warn(e); }
+  L.faceid = false;
+  if (ok){ guardarFallosPin(null); desbloquear(); }
+  else if (!auto) pintarLock('Face ID no ha funcionado. Usa tu código.', true);
+}
 function desbloquear(){ $('#lock').hidden = true; taparApp(false); }
 document.addEventListener('keydown', e => { if (!bloqueada() || e.metaKey || e.ctrlKey || e.altKey) return; if (/^[0-9]$/.test(e.key)){ e.preventDefault(); teclaPin(e.key); } else if (e.key === 'Backspace'){ e.preventDefault(); borrarPin(); } });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') L.oculta = Date.now(); else if (L.oculta && Date.now() - L.oculta >= BLOQUEO_MIN*60000 && !bloqueada()) bloquear(); });
