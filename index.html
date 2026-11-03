@@ -1126,7 +1126,7 @@ const nombreRec = rc => rc.cat === 'nomina' ? 'la nómina' : `«${esc(rc.detalle
 function vNomina(hoy){
   return S.recs.filter(r => r.variable && r.tipo === 'ingreso' && r.activo !== false).map(rc => {
     const p = nominaPendiente(rc, hoy); if (!p) return '';
-    return `<section class="card nudge"><div style="display:grid;gap:6px"><h2 class="big">¿Has cobrado ya ${nombreRec(rc)}?</h2><p class="muted">Suele llegar hacia el día ${rc.dia}. Anota lo que te haya llegado de verdad para que tus números cuadren.${p.ult ? ` La última fue de ${eur(p.ult.importe)}.` : ''}${stbyNomina(ymOf(p.exp))}</p></div><button class="btn primary" data-act="anotar-nomina" data-id="${esc(rc.id)}">Anotar lo que he cobrado</button></section>`;
+    return `<section class="card nudge"><div style="display:grid;gap:6px"><h2 class="big">¿Has cobrado ya ${nombreRec(rc)}?</h2><p class="muted">Suele llegar hacia el día ${rc.dia}. Anota lo que te haya llegado de verdad para que tus números cuadren.${p.ult ? ` La última fue de ${eur(p.ult.importe)}.` : ''}${stbyNomina()}</p></div><button class="btn primary" data-act="anotar-nomina" data-id="${esc(rc.id)}">Anotar lo que he cobrado</button></section>`;
   }).join('');
 }
 const notaNomina = () => S.recs.filter(r => r.variable && r.tipo === 'ingreso' && r.activo !== false).map(r => { const e = estNomina(r); return `<p class="muted">${esc(r.detalle || 'Nómina')}: ${e.n ? `se usa ${e.n === 1 ? 'la última que cobraste' : `la media de las últimas ${e.n} que cobraste`}, ${eur(e.v, {dec:0})} al mes` : `se usa tu estimación, ${eur(e.v, {dec:0})} al mes, hasta que anotes alguna`}.</p>`; }).join('');
@@ -1155,24 +1155,35 @@ function vStbyMini(){
   return `<section class="card" style="padding:10px 14px 10px 20px"><div class="stbyq"><button class="row" data-act="stby"><span class="ico tr">${ic('ticket')}</span><span class="r-main"><span class="r-t">STBY</span><span class="r-s">${sub}</span></span></button><button class="btn small primary" data-act="new-stby">+ Billete</button></div></section>`;
 }
 
-/* Cuando cobras la nómina en la que te quitan el IRPF del STBY, propone recuperarlo de la hucha donde lo apartaste */
-function irpfPendiente(){
-  const cobradas = new Set(S.movs.filter(m => m.tipo === 'ingreso' && m.cat === 'nomina').map(m => ymOf(m.fecha)));
-  return S.stby.filter(t => !t.irpfOk && t.cobrado && t.hucha && t.apartado > 0 && retStby(t) > 0 && t.mesNomina && cobradas.has(t.mesNomina));
-}
+/* El IRPF del STBY: Recursos Humanos lo aplica cuando quiere, así que no se adivina el mes. Al anotar una nómina, la app pregunta qué billetes
+   trae (los que ya habías cobrado y apartado en una hucha) y propone recuperar ese IRPF de la hucha. Los que no marques siguen pendientes. */
+const irpfDeBillete = t => !t.irpfOk && retStby(t) > 0;
+const irpfPendienteTotal = () => r2(S.stby.filter(irpfDeBillete).reduce((a,t) => a + retStby(t), 0));
 const devolverIrpf = t => r2(Math.min(retStby(t), t.apartado));
-function vStbyIrpf(){
-  const ts = irpfPendiente(); if (!ts.length) return '';
-  const v = r2(ts.reduce((a,t) => a + devolverIrpf(t), 0)), huchas = [...new Set(ts.map(t => ctaNombre(t.hucha)))].join(' y '), dest = ctaNombre(S.cfg.cuentaPrincipal), ids = ts.map(t => esc(t.id)).join(',');
-  return `<section class="card nudge"><div style="display:grid;gap:6px"><h2 class="big">Recupera el IRPF del STBY</h2><p class="muted">En la nómina que has cobrado te han quitado ${eur(v)} de IRPF por ${ts.length === 1 ? `el billete de ${esc(ts[0].persona)}` : `${ts.length} billetes de STBY`}. Lo tienes apartado en ${esc(huchas)}: pásalo a ${esc(dest)}.</p></div><div class="recbtns"><button class="btn primary" data-act="irpf-si" data-ids="${ids}">Pasar ${eur(v)} a ${esc(dest)}</button><button class="btn ghost" data-act="irpf-no" data-ids="${ids}">Ya lo he hecho</button></div></section>`;
+function irpfPendiente(){
+  let nom = null; for (const m of S.movs) if (m.tipo === 'ingreso' && m.cat === 'nomina' && (!nom || m.fecha > nom.fecha)) nom = m;
+  if (!nom || (S.cfg.stbyRevisado && nom.fecha <= S.cfg.stbyRevisado)) return {nom, ts:[]};
+  return {nom, ts: S.stby.filter(t => irpfDeBillete(t) && t.cobrado && t.hucha && t.apartado > 0 && t.fecha <= nom.fecha).sort((a,b) => a.fecha < b.fecha ? -1 : 1)};
 }
-async function cerrarIrpf(ids, mover){
-  const ts = S.stby.filter(t => ids.includes(t.id)), dest = S.cfg.cuentaPrincipal, now = new Date().toISOString(), v = r2(ts.reduce((a,t) => a + devolverIrpf(t), 0));
-  await guardar(async () => { for (const t of ts){
-    /* Cuenta en el mismo mes que la nómina en la que te quitaron el IRPF */
-    const nom = S.movs.find(m => m.tipo === 'ingreso' && m.cat === 'nomina' && ymOf(m.fecha) === t.mesNomina);
-    if (mover) await store.set('mov', 'stby-i-' + t.id, {fecha:hoyISO(), tipo:'traspaso', importe:devolverIrpf(t), cat:null, cuenta:null, desde:t.hucha, hacia:dest, rec:null, mes: nom ? mesDe(nom) : null, stby:t.id, detalle:`STBY · IRPF · ${t.persona}`, creado:now});
-    await store.set('stby', t.id, {...strip(t), irpfOk:true}); } }, mover ? `Pasados ${eur(v)} a ${ctaNombre(dest)}` : 'Hecho');
+function vStbyIrpf(){
+  const {nom, ts} = irpfPendiente(); if (!ts.length) return '';
+  const dest = ctaNombre(S.cfg.cuentaPrincipal), sel = S.irpfSel ||= new Set(), v = r2(ts.filter(t => sel.has(t.id)).reduce((a,t) => a + devolverIrpf(t), 0));
+  return `<section class="card nudge"><div style="display:grid;gap:6px"><h2 class="big">¿Esta nómina trae el IRPF del STBY?</h2><p class="muted">Mira tu nómina del ${fechaDM(nom.fecha)} y marca los billetes cuyo pago en especie venga en ella. Lo que marques lo recuperas de la hucha; los demás siguen pendientes para la próxima.</p></div>
+    <div style="display:grid;gap:10px">${ts.map(t => `<label class="check"><input type="checkbox" data-irpf="${esc(t.id)}" ${sel.has(t.id) ? 'checked' : ''}><span><b>${esc(t.persona)}</b>${t.detalle ? ` · ${esc(t.detalle)}` : ''} · especie ${eur(t.especie)} → <b>${eur(devolverIrpf(t))}</b></span></label>`).join('')}</div>
+    <div class="recbtns"><button class="btn primary" data-act="irpf-si" id="irpfGo" ${v > 0 ? '' : 'disabled'}>Pasar ${eur(v)} a ${esc(dest)}</button><button class="btn ghost" data-act="irpf-no">Ninguno esta vez</button></div></section>`;
+}
+/* Marca los billetes elegidos como recuperados (traspaso de la hucha a la cuenta de la nómina, en el mes de esa nómina) y da la nómina por revisada */
+async function cerrarIrpf(mover){
+  const {nom, ts} = irpfPendiente(); if (!nom) return;
+  const sel = mover ? ts.filter(t => S.irpfSel?.has(t.id)) : [], dest = S.cfg.cuentaPrincipal, now = new Date().toISOString(), v = r2(sel.reduce((a,t) => a + devolverIrpf(t), 0));
+  await guardar(async () => {
+    for (const t of sel){
+      await store.set('mov', 'stby-i-' + t.id, {fecha:hoyISO(), tipo:'traspaso', importe:devolverIrpf(t), cat:null, cuenta:null, desde:t.hucha, hacia:dest, rec:null, mes:mesDe(nom), stby:t.id, detalle:`STBY · IRPF · ${t.persona}`, creado:now});
+      await store.set('stby', t.id, {...strip(t), irpfOk:true, irpfNomina:nom.fecha});
+    }
+    await store.setCfg({...S.cfg, stbyRevisado:nom.fecha});
+  }, mover ? `Pasados ${eur(v)} a ${ctaNombre(dest)}` : 'Hecho. Te volveré a preguntar en la próxima nómina');
+  S.irpfSel = new Set();
 }
 
 /* ----- Movimientos ----- */
@@ -1523,9 +1534,7 @@ const stbyPend = () => S.stby.filter(t => !t.cobrado);
 /* Lo que te cuesta de verdad un billete: el billete más el IRPF del pago en especie, que te retienen en la nómina */
 const retStby = t => r2((t.especie || 0) * (t.irpf || 0) / 100);
 const costeStby = t => r2(t.coste + retStby(t));
-/* Lo que te quitan de la nómina por un billete: el billete si va por nómina y, siempre, el IRPF del pago en especie */
-const enNominaStby = t => r2((t.pago === 'nomina' ? t.coste : 0) + retStby(t));
-const stbyNomina = ym => { const v = S.stby.reduce((a,t) => a + ((t.mesNomina || ymOf(t.fecha)) === ym ? enNominaStby(t) : 0), 0); return v > 0 ? ` Este mes te descuentan unos ${eur(v)} de STBY.` : ''; };
+const stbyNomina = () => { const v = irpfPendienteTotal(); return v > 0 ? ` Puede que venga con hasta ${eur(v)} menos por el IRPF del STBY que tienes pendiente.` : ''; };
 const stbyResumenTxt = () => { const p = stbyPend(), v = p.reduce((a,t) => a + t.cobrar, 0); return p.length ? `${p.length} sin cobrar · te deben ${eur(v)}` : (S.stby.length ? 'Todo cobrado' : 'Billetes que sacas a otros'); };
 function vStby(){
   if (!S.cfg) return vSinCfg('STBY');
@@ -1534,23 +1543,25 @@ function vStby(){
   const cob = S.stby.filter(t => t.cobrado).sort((a,b) => (a.fechaCobro || '') < (b.fechaCobro || '') ? 1 : -1);
   const debe = r2(pend.reduce((a,t) => a + t.cobrar, 0)), margen = r2(S.stby.reduce((a,t) => a + t.cobrar - costeStby(t), 0));
   const cobMes = r2(cob.reduce((a,t) => a + (ymOf(t.fechaCobro || '0000-00') === cur ? t.cobrar : 0), 0));
-  const nom = {}; for (const t of S.stby){ const v = enNominaStby(t); if (!(v > 0)) continue; const ym = t.mesNomina || ymOf(t.fecha); (nom[ym] ||= {v:0, n:0}); nom[ym].v += v; nom[ym].n++; }
+  /* IRPF recuperado de la hucha, por la nómina en la que te lo quitaron */
+  const nom = {}; for (const m of S.movs){ if (!String(m.id).startsWith('stby-i-')) continue; const ym = mesDe(m); (nom[ym] ||= {v:0, n:0}); nom[ym].v += m.importe; nom[ym].n++; }
+  const irpfP = S.stby.filter(irpfDeBillete), irpfV = r2(irpfP.reduce((a,t) => a + retStby(t), 0));
   const per = {}; for (const t of pend){ const k = t.persona.trim().toLowerCase(); (per[k] ||= {n:t.persona.trim() || 'Sin nombre', v:0, ids:[]}); per[k].v += t.cobrar; per[k].ids.push(t.id); }
   const nb = n => `${n} ${n === 1 ? 'billete' : 'billetes'}`;
   const tile = (k, v, s, vc = '') => `<div class="tile"><p class="t-k">${k}</p><p class="t-v ${vc}">${v}</p>${s ? `<p class="t-s">${s}</p>` : ''}</div>`;
   const dif = t => { const d = r2(t.cobrar - costeStby(t)); return Math.abs(d) < .005 ? '' : ` <span class="pill ${d > 0 ? 'ingreso' : 'ahorro'}">${d > 0 ? '+' : '−'}${eur(Math.abs(d))}</span>`; };
-  const row = t => `<div class="srow2"><button class="mrow" data-act="edit-stby" data-id="${esc(t.id)}"><span class="mmain"><span class="mtitle">${esc(t.persona || 'Sin nombre')}${t.detalle ? ` · ${esc(t.detalle)}` : ''}</span><span class="mmeta">${cap(fechaCorta(t.fecha))} <span class="pill">${t.pago === 'nomina' ? `nómina de ${mesNombre(t.mesNomina || ymOf(t.fecha))}` : 'tarjeta'}</span> te cuesta ${eur(costeStby(t))}${dif(t)}${t.cobrado && t.fechaCobro ? ` · cobrado el ${fechaCorta(t.fechaCobro)}` : ''}${t.apartado > 0 && t.hucha ? ` · ${eur(t.apartado)} a ${esc(ctaNombre(t.hucha))}` : ''}</span></span><span class="mamt">${eur(t.cobrar)}</span></button>${t.cobrado ? '' : `<button class="btn small ghost" data-act="cobrar-stby" data-ids="${esc(t.id)}">Cobrado</button>`}</div>`;
-  const meses = Object.keys(nom).sort().reverse().slice(0, 6), nc = nom[cur];
+  const row = t => `<div class="srow2"><button class="mrow" data-act="edit-stby" data-id="${esc(t.id)}"><span class="mmain"><span class="mtitle">${esc(t.persona || 'Sin nombre')}${t.detalle ? ` · ${esc(t.detalle)}` : ''}</span><span class="mmeta">${cap(fechaCorta(t.fecha))} <span class="pill">${t.pago === 'nomina' ? `nómina de ${mesNombre(t.mesNomina || ymOf(t.fecha))}` : 'tarjeta'}</span> te cuesta ${eur(costeStby(t))}${dif(t)}${t.cobrado && t.fechaCobro ? ` · cobrado el ${fechaCorta(t.fechaCobro)}` : ''}${t.apartado > 0 && t.hucha ? ` · ${eur(t.apartado)} a ${esc(ctaNombre(t.hucha))}` : ''}${retStby(t) > 0 ? (t.irpfOk ? ' · IRPF recuperado' : ' · IRPF pendiente') : ''}</span></span><span class="mamt">${eur(t.cobrar)}</span></button>${t.cobrado ? '' : `<button class="btn small ghost" data-act="cobrar-stby" data-ids="${esc(t.id)}">Cobrado</button>`}</div>`;
+  const meses = Object.keys(nom).sort().reverse().slice(0, 6);
   const quien = Object.values(per).sort((a,b) => b.v - a.v);
   return vTop('STBY', {back:true, sub:'Billetes que sacas a otros'}) + banner() +
    `<div class="tiles">${tile('Te deben', eur(debe), pend.length ? `${nb(pend.length)} sin cobrar` : 'Nada pendiente')}
      ${tile('Cobrado este mes', eur(cobMes), cap(mesNombre(cur)))}
-     ${tile(`IRPF del STBY en la nómina de ${mesNombre(cur)}`, eur(nc ? -nc.v : 0), nc ? nb(nc.n) : 'Ningún billete', nc ? 'neg' : '')}
+     ${tile('IRPF pendiente', eur(irpfV), irpfP.length ? `${nb(irpfP.length)} · te lo quitarán en alguna nómina` : 'Nada pendiente')}
      ${tile('Margen total', eur(margen, {signo:true}), 'Lo que cobras de más o de menos', margen < 0 ? 'neg' : margen > 0 ? 'pos' : '')}</div>
    <button class="btn primary wide" data-act="new-stby">+ Apuntar un billete</button>
    ${quien.length ? `<section class="card"><h2>Quién te debe</h2><div>${quien.map(x => `<div class="srow2"><span class="lrow-main" style="padding:12px 0"><span class="lrow-t">${esc(x.n)}</span><span class="lrow-s">${nb(x.ids.length)} · ${eur(x.v)}</span></span><button class="btn small ${x.ids.length > 1 ? 'primary' : 'ghost'}" data-act="cobrar-stby" data-ids="${x.ids.map(esc).join(',')}">${x.ids.length > 1 ? 'Cobrar todo' : 'Cobrado'}</button></div>`).join('')}</div></section>` : ''}
    <section class="card"><h2>Sin cobrar</h2>${pend.length ? `<div class="mlist">${pend.map(row).join('')}</div>` : `<p class="muted">${S.stby.length ? 'Todo cobrado.' : 'Cuando saques un billete para alguien, apúntalo aquí con lo que te cuesta y lo que le cobras. Cuando te pague, toca «Cobrado».'}</p>`}</section>
-   ${meses.length ? `<section class="card"><div style="display:grid;gap:4px"><h2>IRPF en tus nóminas</h2><p class="muted">Lo que te quitan en cada nómina por los pagos en especie.</p></div><div>${meses.map(ym => `<div class="lrow"><span class="lrow-main"><span class="lrow-t">${cap(mesAnyo(ym))}</span><span class="lrow-s">${nb(nom[ym].n)}</span></span><span class="lrow-v neg">${eur(-nom[ym].v)}</span></div>`).join('')}</div></section>` : ''}
+   ${meses.length ? `<section class="card"><div style="display:grid;gap:4px"><h2>IRPF que te han quitado</h2><p class="muted">Por la nómina en la que venía, según lo que marcaste al cobrarla.</p></div><div>${meses.map(ym => `<div class="lrow"><span class="lrow-main"><span class="lrow-t">Nómina de ${mesNombre(ym)}</span><span class="lrow-s">${nb(nom[ym].n)}</span></span><span class="lrow-v neg">${eur(-nom[ym].v)}</span></div>`).join('')}</div></section>` : ''}
    ${cob.length ? `<details class="card"><summary><span class="sumt"><b>Cobrados</b><small>${nb(cob.length)}</small></span><span class="chev" aria-hidden="true">›</span></summary><div class="mlist">${cob.slice(0, 40).map(row).join('')}</div></details>` : ''}`;
 }
 const VIEWS = {inicio:vInicio, resumen:vInicio, movimientos:vMovimientos, patrimonio:vPatrimonio, analisis:vAnalisis, proyeccion:vAnalisis, ajustes:vAjustes, mas:vAjustes, stby:vStby};
@@ -2040,8 +2051,7 @@ function huchaStby(t){
 const sobraStby = t => r2(Math.max(t.cobrar - t.coste, 0));
 function notaCobro(ts, apa){
   const coste = r2(ts.reduce((a,t) => a + t.coste, 0)), ret = r2(ts.reduce((a,t) => a + retStby(t), 0)), gana = r2(ts.reduce((a,t) => a + t.cobrar - costeStby(t), 0));
-  const meses = [...new Set(ts.filter(t => retStby(t) > 0 && t.mesNomina).map(t => mesNombre(t.mesNomina)))];
-  return `Recuperas los ${eur(coste)} del billete${apa > 0 ? ` y apartas ${eur(apa)}` : ''}. ${ret > 0 ? `${eur(ret)} son el IRPF del pago en especie: te los quitarán en la nómina que cobres en ${meses.join(' y ') || 'su mes'}${apa > 0 ? ', y entonces te propondré recuperarlos de la hucha' : ''}. ` : ''}Lo que ganas de verdad: ${eur(gana, {signo:true})}.`;
+  return `Recuperas los ${eur(coste)} del billete${apa > 0 ? ` y apartas ${eur(apa)}` : ''}. ${ret > 0 ? `${eur(ret)} son el IRPF del pago en especie: te los quitarán en alguna nómina${apa > 0 ? '. Cuando la anotes, te preguntaré si viene y te propondré recuperarlos de la hucha' : ''}. ` : ''}Lo que ganas de verdad: ${eur(gana, {signo:true})}.`;
 }
 const apartarHTML = (on, imp, soloLectura) => huchasStby().length ? `<label class="check"><input type="checkbox" id="apOn" ${on ? 'checked' : ''}><span>Apartar lo que sobra en una hucha</span></label>
     <div class="grid2" id="apW"><div class="fld"><label for="apHuc">Hucha</label><select id="apHuc">${huchasStby().map(c => `<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('')}</select></div><div class="fld"><label for="apImp">Importe</label><div class="amount sm"><input id="apImp" inputmode="decimal" value="${imp > 0 ? fmtIn(imp) : ''}" placeholder="0" ${soloLectura ? 'readonly' : ''}><span>€</span></div></div></div>` : '';
@@ -2057,7 +2067,6 @@ function sheetStby(t){
     <div class="fld"><label for="bCobrar">Le cobras</label><div class="amount sm"><input id="bCobrar" inputmode="decimal" placeholder="0" value="${t ? fmtIn(t.cobrar) : ''}"><span>€</span></div></div>
     <p class="note" id="bDif"></p>
     <div class="fld"><label for="bFecha">Cuándo lo sacaste</label><input type="date" id="bFecha" value="${esc(t?.fecha || hoyISO())}"></div>
-    <div class="fld" id="bMesW"><label for="bMes">El IRPF del especie te lo quitan en la nómina que cobras en</label><input type="month" id="bMes" value="${esc(t?.mesNomina || addMonths(ymOf(t?.fecha || hoyISO()), 1))}" placeholder="${addMonths(ymOf(hoyISO()), 1)}"></div>
     <div class="fld" id="bCtaW"><label for="bCta">Pagado desde</label><select id="bCta">${optsCuentas()}</select><span class="note">Se anota solo como gasto de STBY en esa cuenta. No cuenta en el sobre.</span></div>
     <label class="check"><input type="checkbox" id="bCob" ${t?.cobrado ? 'checked' : ''}><span>Ya me lo ha pagado</span></label>
     <div id="bCobW" class="form" style="gap:12px"><div class="fld"><label for="bCobCta">Dónde lo has recibido</label><select id="bCobCta">${optsCuentas()}</select></div><div class="fld"><label for="bCobF">Cuándo</label><input type="date" id="bCobF" value="${esc(t?.fechaCobro || hoyISO())}"></div>
@@ -2077,9 +2086,9 @@ function sheetStby(t){
     /* Lo que sobra se propone solo (lo que te paga menos el billete) mientras no lo cambies */
     const apartar = () => { if (!q('#apOn')) return; const on = q('#apOn').checked, cobra = q('#bCobrar').value.trim() ? parseImporte(q('#bCobrar').value) : total();
       q('#apW').hidden = !on; if (!st.apTocado) q('#apImp').value = fmtIn(Math.max(r2(cobra - num('#bCoste')), 0));
-      const ap = on ? num('#apImp') : 0; q('#apNota').textContent = cobra >= 0 ? notaCobro([{coste:num('#bCoste'), cobrar:cobra, especie:num('#bEsp'), irpf, mesNomina:q('#bMes').value}], ap > 0 ? ap : 0) : ''; };
-    const sync = () => { q('#bMesW').hidden = !(num('#bEsp') > 0); q('#bCobW').hidden = !q('#bCob').checked; calc(); dif(); apartar(); };
-    q('#apOn')?.addEventListener('change', sync); q('#apImp')?.addEventListener('input', () => { st.apTocado = true; apartar(); }); q('#bMes').addEventListener('change', apartar);
+      const ap = on ? num('#apImp') : 0; q('#apNota').textContent = cobra >= 0 ? notaCobro([{coste:num('#bCoste'), cobrar:cobra, especie:num('#bEsp'), irpf}], ap > 0 ? ap : 0) : ''; };
+    const sync = () => { q('#bCobW').hidden = !q('#bCob').checked; calc(); dif(); apartar(); };
+    q('#apOn')?.addEventListener('change', sync); q('#apImp')?.addEventListener('input', () => { st.apTocado = true; apartar(); });
     q('#bCob').addEventListener('change', sync);
     /* Mientras no toques «Le cobras», propone el coste total */
     const alCambiar = () => { if (!st.cobTocado){ const tot = total(); q('#bCobrar').value = tot > 0 ? fmtIn(tot) : ''; } sync(); };
@@ -2090,15 +2099,14 @@ function sheetStby(t){
     q('#fStby').addEventListener('submit', e => {
       e.preventDefault(); const err = q('.err'); err.textContent = '';
       const per = q('#bPer').value.trim(), coste = q('#bCoste').value.trim() ? parseImporte(q('#bCoste').value) : 0, especie = q('#bEsp').value.trim() ? parseImporte(q('#bEsp').value) : 0, cobrar = q('#bCobrar').value.trim() ? parseImporte(q('#bCobrar').value) : r2(coste + especie*irpf/100);
-      const fecha = q('#bFecha').value || hoyISO(), mes = q('#bMes').value, cob = q('#bCob').checked;
+      const fecha = q('#bFecha').value || hoyISO(), cob = q('#bCob').checked;
       if (!per){ err.textContent = 'Pon para quién es el billete.'; q('#bPer').focus(); return; }
       if (!(coste >= 0) || !(especie >= 0) || !(cobrar >= 0)){ err.textContent = 'Revisa los importes: tienen que ser números.'; return; }
       if (!(coste > 0) && !(cobrar > 0)){ err.textContent = 'Pon lo que te cuesta y lo que le cobras.'; q('#bCoste').focus(); return; }
-      if (especie > 0 && !isYM(mes)){ err.textContent = 'Escribe el mes de la nómina como 2026-11.'; return; }
       const ap = cob && q('#apOn')?.checked, apImp = ap ? num('#apImp') : 0;
       if (!(apImp >= 0)){ err.textContent = 'Lo que apartas tiene que ser un número.'; return; }
       const id = t?.id || uid('s');
-      const doc = {persona:per, detalle:q('#bDet').value.trim(), fecha, coste:r2(coste), especie:r2(especie), irpf: especie > 0 ? irpf : 0, cobrar:r2(cobrar), pago:'tarjeta', mesNomina: especie > 0 ? mes : null, cuentaPago:q('#bCta').value,
+      const doc = {persona:per, detalle:q('#bDet').value.trim(), fecha, coste:r2(coste), especie:r2(especie), irpf: especie > 0 ? irpf : 0, cobrar:r2(cobrar), pago:'tarjeta', mesNomina:null, cuentaPago:q('#bCta').value,
         cobrado:cob, fechaCobro: cob ? (q('#bCobF').value || hoyISO()) : null, cuentaCobro: cob ? q('#bCobCta').value : null,
         apartar: cob ? !!ap : t?.apartar, hucha: ap && apImp > 0 ? q('#apHuc').value : null, apartado: ap ? r2(apImp) : 0, irpfOk: !!t?.irpfOk, creado:t?.creado || new Date().toISOString()};
       closeSheet(); guardar(async () => { await store.set('stby', id, doc); await syncStbyMovs(id, doc); }, edit ? 'Billete guardado' : `Apuntado: ${per}, ${eur(cobrar)}`);
@@ -2610,7 +2618,7 @@ const ACT = {
   'edit-stby': b => { const t = S.stby.find(x => x.id === b.dataset.id); if (t) sheetStby(t); },
   'inicio-app': () => sheetInicio(),
   'cobrar-stby': b => sheetCobro(String(b.dataset.ids || '').split(',')),
-  'irpf-si': b => cerrarIrpf(String(b.dataset.ids || '').split(','), true), 'irpf-no': b => cerrarIrpf(String(b.dataset.ids || '').split(','), false),
+  'irpf-si': () => cerrarIrpf(true), 'irpf-no': () => cerrarIrpf(false),
   setup: () => sheetSetup(),
   'sheet-sobre': () => sheetSobre(), 'sheet-sueldo': () => sheetSueldo(), 'sheet-cats': () => sheetCats(),
   'new-rec': b => sheetRec(null, b.dataset.t), 'edit-rec': b => { const r = S.recs.find(x => x.id === b.dataset.id); if (r) sheetRec(r); },
@@ -2633,7 +2641,11 @@ const ACT = {
 };
 document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (!b || b.disabled) return; const f = ACT[b.dataset.act]; if (f){ e.preventDefault(); f(b, e); } });
 document.addEventListener('input', e => { if (e.target.id === 'qIn') S.quick = e.target.value; else if (e.target.id === 'mSearch'){ S.q = e.target.value; schedule(); } });
-document.addEventListener('change', e => { const id = e.target.id; if (id === 'fTipo'){ S.ftipo = e.target.value; render(); } else if (id === 'fCta'){ S.fcta = e.target.value; render(); } else if (id === 'fCat'){ S.fcat = e.target.value; render(); } else if (id === 'fileCopia') leerCopia(e.target); });
+document.addEventListener('change', e => {
+  const ir = e.target.dataset?.irpf; if (ir){ const sel = S.irpfSel ||= new Set(); e.target.checked ? sel.add(ir) : sel.delete(ir);
+    const {ts} = irpfPendiente(), v = r2(ts.filter(t => sel.has(t.id)).reduce((a,t) => a + devolverIrpf(t), 0)), b = $('#irpfGo');
+    if (b){ b.disabled = !(v > 0); b.textContent = `Pasar ${eur(v)} a ${ctaNombre(S.cfg.cuentaPrincipal)}`; } return; }
+  const id = e.target.id; if (id === 'fTipo'){ S.ftipo = e.target.value; render(); } else if (id === 'fCta'){ S.fcta = e.target.value; render(); } else if (id === 'fCat'){ S.fcat = e.target.value; render(); } else if (id === 'fileCopia') leerCopia(e.target); });
 let storageT = 0;
 window.addEventListener('storage', e => { if (S.mode !== 'local' || (e.key && !e.key.startsWith(LS))) return; clearTimeout(storageT); storageT = setTimeout(() => { cargarLocal(); after(); }, 150); });
 document.addEventListener('toggle', e => { if (e.target.id === 'recsBox') S.recsOpen = e.target.open; }, true);
