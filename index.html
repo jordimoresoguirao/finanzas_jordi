@@ -1013,8 +1013,9 @@ function sobraMes(hoy){
   const M = {ing:0, gas:0, huchas:0, ahorro:0, pendIng:0, pendFijos:0, pendHuchas:0, pendAhorro:0, sobre:0, plan:0};
   const esStby = m => !!m.stby || m.cat === 'stby' || m.cat === 'stby-g';
   const hucha = id => cm[id]?.tipo === 'hucha' && id !== sb.origen, ahorro = id => esAhorro(cm[id]);
+  /* Del STBY solo cuenta recuperar de la hucha el IRPF que te quitaron en la nómina: compensa esa nómina más baja */
   for (const m of S.movs){
-    if (mesDe(m) !== ym || esStby(m)) continue;
+    if (mesDe(m) !== ym || (esStby(m) && !String(m.id).startsWith('stby-i-'))) continue;
     if (m.tipo === 'ingreso') M.ing += m.importe;
     else if (m.tipo === 'gasto'){ if (!hucha(m.cuenta)) M.gas += m.importe; }   /* lo que pagas desde una hucha ya contó al apartarlo */
     else if (m.tipo === 'traspaso'){
@@ -1168,7 +1169,9 @@ function vStbyIrpf(){
 async function cerrarIrpf(ids, mover){
   const ts = S.stby.filter(t => ids.includes(t.id)), dest = S.cfg.cuentaPrincipal, now = new Date().toISOString(), v = r2(ts.reduce((a,t) => a + devolverIrpf(t), 0));
   await guardar(async () => { for (const t of ts){
-    if (mover) await store.set('mov', 'stby-i-' + t.id, {fecha:hoyISO(), tipo:'traspaso', importe:devolverIrpf(t), cat:null, cuenta:null, desde:t.hucha, hacia:dest, rec:null, mes:null, stby:t.id, detalle:`STBY · IRPF · ${t.persona}`, creado:now});
+    /* Cuenta en el mismo mes que la nómina en la que te quitaron el IRPF */
+    const nom = S.movs.find(m => m.tipo === 'ingreso' && m.cat === 'nomina' && ymOf(m.fecha) === t.mesNomina);
+    if (mover) await store.set('mov', 'stby-i-' + t.id, {fecha:hoyISO(), tipo:'traspaso', importe:devolverIrpf(t), cat:null, cuenta:null, desde:t.hucha, hacia:dest, rec:null, mes: nom ? mesDe(nom) : null, stby:t.id, detalle:`STBY · IRPF · ${t.persona}`, creado:now});
     await store.set('stby', t.id, {...strip(t), irpfOk:true}); } }, mover ? `Pasados ${eur(v)} a ${ctaNombre(dest)}` : 'Hecho');
 }
 
