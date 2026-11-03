@@ -1005,6 +1005,47 @@ function porPagar(ym, hoy){
   items.sort((a,b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
   return {items, total:r2(items.reduce((a,x) => a + x.importe, 0))};
 }
+/* Lo que te sobrará este mes cuando pagues todo lo que falta. Las huchas de gastos cuentan como gasto (ese dinero lo vas a gastar),
+   lo que va a ahorro e inversión se cuenta aparte y el STBY va por su lado (su pantalla y su hucha).
+   Es también el ahorro neto del mes en curso en Análisis → Futuro. */
+function sobraMes(hoy){
+  const ym = ymOf(hoy), cm = ctasMap(), sb = S.cfg.sobre, dc = deudasCtx(), fin = `${ym}-${pad(diasMes(ym))}`;
+  const M = {ing:0, gas:0, huchas:0, ahorro:0, pendIng:0, pendFijos:0, pendHuchas:0, pendAhorro:0, sobre:0, plan:0};
+  const esStby = m => !!m.stby || m.cat === 'stby' || m.cat === 'stby-g';
+  const hucha = id => cm[id]?.tipo === 'hucha' && id !== sb.origen, ahorro = id => esAhorro(cm[id]);
+  for (const m of S.movs){
+    if (mesDe(m) !== ym || esStby(m)) continue;
+    if (m.tipo === 'ingreso') M.ing += m.importe;
+    else if (m.tipo === 'gasto'){ if (!hucha(m.cuenta)) M.gas += m.importe; }   /* lo que pagas desde una hucha ya contó al apartarlo */
+    else if (m.tipo === 'traspaso'){
+      if (hucha(m.hacia) && !hucha(m.desde)) M.huchas += m.importe; else if (hucha(m.desde) && !hucha(m.hacia)) M.huchas -= m.importe;
+      if (ahorro(m.hacia) && !ahorro(m.desde)) M.ahorro += m.importe; else if (ahorro(m.desde) && !ahorro(m.hacia)) M.ahorro -= m.importe;
+    }
+  }
+  /* Lo que aún falta este mes: fijos que no se han anotado, la nómina variable si cuenta para este mes, el sobre y lo planificado */
+  for (const rc of S.recs){
+    if (rc.activo === false || !recActiva(rc, ym) || (rc.omitidos||[]).includes(ym)) continue;
+    if (rc.tipo === 'ingreso' && rc.variable){ const pr = esperada(rc, hoy).exp; if (ymOf(pr) === ym && pr >= hoy && !(rc.cat === 'nomina' && offNomina(pr) !== 0)) M.pendIng += estNomina(rc).v; continue; }
+    const f = fechaPago(ym, rc.dia); if (f <= hoy || S.movs.some(m => m.id === `r-${rc.id}-${ym}`)) continue;
+    let imp = rc.importe;
+    if (rc.deuda){ const df = dc[rc.deuda]; if (df && (df.pagado || (df.fin && ym > df.fin))) continue; if (df && ym === df.fin) imp = df.ultima; }
+    if (rc.tipo === 'ingreso'){ if (!(rc.cat === 'nomina' && offNomina(f) !== 0)) M.pendIng += imp; }
+    else if (rc.tipo === 'gasto'){ if (!hucha(rc.cuenta)) M.pendFijos += imp; }
+    else if (hucha(rc.hacia) && !hucha(rc.desde)) M.pendHuchas += imp;
+    else if (ahorro(rc.hacia) && !ahorro(rc.desde)) M.pendAhorro += imp;
+  }
+  /* El sobre, como si lo gastaras entero: lo que queda de esta semana y las recargas que faltan del mes */
+  if (sb.importe > 0 && sb.cuenta) M.sobre = Math.max(sobreSemana(hoy).queda, 0) + recargasEntre(hoy, fin, Number(sb.dia) || 0)*sb.importe;
+  for (const pl of S.plans) if (planEnMes(pl, ym)){ if (pl.tipo === 'ingreso') M.pendIng += pl.importe; else M.plan += pl.importe; }
+  for (const k of Object.keys(M)) M[k] = r2(M[k]);
+  M.pend = r2(M.pendFijos + M.pendHuchas + M.sobre + M.plan);
+  M.sobra = r2(M.ing + M.pendIng - M.gas - M.huchas - M.pend);
+  M.ahorroMes = r2(M.ahorro + M.pendAhorro);
+  const dest = [...new Set(S.recs.filter(r => r.tipo === 'traspaso' && r.activo !== false && ahorro(r.hacia)).map(r => ctaNombre(r.hacia)))];
+  M.ahorroA = dest.length === 1 ? dest[0] : 'ahorro e inversión';
+  return M;
+}
+
 /* Fecha en que se espera un ingreso variable (la nómina) */
 function esperada(rc, hoy){
   let ult = null; for (const m of S.movs) if (m.tipo === 'ingreso' && m.cat === rc.cat && (!ult || m.fecha > ult.fecha)) ult = m;
@@ -1063,16 +1104,16 @@ function vHero(hoy){
       ${heroExtra(sb, e)}
     </section>`;
   }
-  const ym = ymOf(hoy), r = resumenMes(ym, S.movs, ctasMap()), dia = Number(hoy.slice(8)), dRest = diasMes(ym) - dia;
-  const tq = r2(r.ing - r.gas), pp = porPagar(ym, hoy), eS = haySobre ? sobreSemana(hoy) : null, libre = r2(tq - pp.total - (eS ? Math.max(eS.queda, 0) : 0));
+  const ym = ymOf(hoy), dia = Number(hoy.slice(8)), dRest = diasMes(ym) - dia, M = sobraMes(hoy), over = M.sobra < 0;
   const mc = MESES_C[Number(ym.slice(5)) - 1];
-  return `<section class="hero ${tq < 0 ? 'is-over' : ''}" aria-label="Este mes">
+  const falta = [M.pendFijos && `fijos ${eur(M.pendFijos, {dec:0})}`, M.sobre && `sobre ${eur(M.sobre, {dec:0})}`, M.pendHuchas && `huchas ${eur(M.pendHuchas, {dec:0})}`, M.plan && `planificados ${eur(M.plan, {dec:0})}`].filter(Boolean);
+  return `<section class="hero ${over ? 'is-over' : ''}" aria-label="Este mes">
     <div class="hero-top">${seg}<p class="hero-r">${dRest === 0 ? 'Último día' : dRest === 1 ? 'Queda 1 día' : `Quedan ${dRest} días`}</p></div>
-    <p class="hero-k">Te queda este mes</p>
-    <p class="hero-big">${eur(tq)}</p>
-    ${pp.total > 0 || eS ? `<p class="hero-sub">Cuando pagues los fijos y sobres que faltan, te quedarán unos ${eur(libre, {dec:0})}</p>` : ''}
+    <p class="hero-k">${over ? 'Este mes te faltarán' : 'Te sobrará este mes'}</p>
+    <p class="hero-big">${eur(Math.abs(M.sobra))}</p>
+    <p class="hero-sub">${falta.length ? `Cuando pagues lo que falta: ${falta.join(', ')}.` : 'Ya has pagado todo lo de este mes.'}${M.ahorroMes > 0 ? ` Además, apartas ${eur(M.ahorroMes, {dec:0})} a ${esc(M.ahorroA)}.` : ''}</p>
     ${timeline(diasMes(ym), dia - 1, `1 ${mc}`, `${diasMes(ym)} ${mc}`, `Hoy · ${dia}`)}
-    <div class="hero-foot"><span>Ingresos<b class="p">${eur(r.ing, {signo:true})}</b></span><span>Gastos<b>${eur(-r.gas)}</b></span></div>
+    <div class="hero-foot"><span>Ingresos<b class="p">${eur(r2(M.ing + M.pendIng), {signo:true})}</b></span><span>Gastado y apartado<b>${eur(-r2(M.gas + M.huchas))}</b></span></div>
   </section>`;
 }
 function heroExtra(sb, e){
@@ -1388,7 +1429,7 @@ function proyeccion(conIpc){
   const hoy = hoyISO(), cur = ymOf(hoy), im = ipcMes(), rows = []; let acum = 0;
   for (let k = 0; k < 12; k++){
     const ym = addMonths(cur, k), h = habitualMes(ym, ctx(), conIpc ? Math.pow(1+im, k) : 1); let neto = h.neto, row = {ym, ...h};
-    if (k === 0){ const r = resumenMes(cur, S.movs, ctasMap()); neto = r2(Math.max(r.ing, h.ing + h.plIng) - Math.max(r.gas, h.gas + h.plGas)); row.realI = r.ing; row.realG = r.gas; row.actual = true; }
+    if (k === 0){ const r = resumenMes(cur, S.movs, ctasMap()); neto = sobraMes(hoy).sobra; row.realI = r.ing; row.realG = r.gas; row.actual = true; }
     acum = r2(acum + neto); rows.push({...row, neto, acum});
   }
   const first = primerMes(), hist = [];
