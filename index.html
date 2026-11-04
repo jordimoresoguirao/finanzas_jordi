@@ -81,6 +81,11 @@ b{font-weight:700}
 
 /* Cabecera */
 .top{display:flex;align-items:center;gap:12px;padding-top:6px;min-height:52px}
+/* En iPhones estrechos, la cabecera se compacta para que el título y los botones quepan sin salirse */
+.top{min-width:0}
+@media (max-width:380px){.top{gap:10px}.top-a{gap:6px}.top-a .rbtn{width:38px;height:38px}.top > .avatar{width:40px;height:40px;font-size:13.5px}}
+@media (max-width:340px){.top > .avatar{display:none}}
+@media (max-width:400px){.top:has(.top-a > :nth-child(3)){gap:10px}.top-a:has(> :nth-child(3)){gap:6px}.top-a:has(> :nth-child(3)) .rbtn{width:38px;height:38px}}
 .avatar{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:800;font-size:14.5px;letter-spacing:.03em}
 .top-t{flex:1;min-width:0}
 .top h1{font-weight:800;font-size:clamp(22.5px,6.7vw,28px);letter-spacing:-.03em;line-height:1.08;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1211,7 +1216,7 @@ function vMovimientos(){
   const ctaOpts = [['', 'Todas las cuentas'], ...ordenCuentas().map(c => [c.id, c.nombre])];
   const catOpts = [['', 'Todas las categorías'], ...S.cfg.categorias.filter(c => !c.oculta || c.id === S.fcat).map(c => [c.id, `${c.nombre}${c.tipo === 'ingreso' ? ' (ingreso)' : ''}`])];
   const filtros = !!(ft || S.fcta || S.fcat || q);
-  return vTop('Movimientos', {acts:`<button class="rbtn ${S.buscar ? 'on' : ''}" data-act="buscar" aria-label="Buscar" aria-pressed="${!!S.buscar}">${ic('search')}</button>${btnAjustes()}`}) + banner()
+  return vTop('Movimientos', {acts:`<button class="rbtn ${S.buscar ? 'on' : ''}" data-act="buscar" aria-label="Buscar" aria-pressed="${!!S.buscar}">${ic('search')}</button>${btnOjo()}${btnAjustes()}`}) + banner()
    + (S.buscar ? `<div class="search"><label class="sr" for="mSearch">Buscar movimientos</label><input id="mSearch" type="search" placeholder="Buscar: súper, cena, BBVA…" value="${esc(S.q)}"></div>` : '')
    + `<div class="mesnav"><button class="rbtn" data-act="mes" data-d="-1" aria-label="Mes anterior" ${ym <= min ? 'disabled' : ''}>${ic('left')}</button><h2>${cap(mesAnyo(ym))}${ym === cur ? '<small>En curso</small>' : ym > cur ? '<small>El mes que viene</small>' : ''}</h2><button class="rbtn" data-act="mes" data-d="1" aria-label="Mes siguiente" ${ym >= max ? 'disabled' : ''}>${ic('right')}</button></div>
    <div class="kpis"><div class="kpi"><span>Ingresado</span><b class="pos">${eurK(r.ing)}</b></div><div class="kpi"><span>Gastado</span><b class="neg">${eurK(r.gas)}</b></div>${pp ? `<button class="kpi dark" data-act="porpagar"><span>Por pagar</span><b>${eurK(pp.total)}</b></button>` : `<div class="kpi dark"><span>Ahorro</span><b>${eurK(r.neto)}</b></div>`}</div>
