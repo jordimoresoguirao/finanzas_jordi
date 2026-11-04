@@ -76,7 +76,8 @@ svg{flex:none}
 b{font-weight:700}
 .neg{color:var(--neg)} .pos{color:var(--pos)}
 
-.wrap{max-width:560px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:10px calc(120px + env(safe-area-inset-bottom,0px));display:grid;gap:14px}
+:root{--sab:env(safe-area-inset-bottom,0px);--nav-b:max(10px,calc(var(--sab) - 12px))}
+.wrap{max-width:560px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:10px calc(96px + var(--nav-b));display:grid;gap:14px}
 
 /* Cabecera */
 .top{display:flex;align-items:center;gap:12px;padding-top:6px;min-height:52px}
@@ -347,7 +348,7 @@ a.btn{text-decoration:none;color:inherit}
 .chip[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);box-shadow:none}
 
 /* Barra de pestañas flotante */
-.nav{position:fixed;z-index:30;left:0;right:0;bottom:0;padding:0 max(10px,env(safe-area-inset-right,0px)) calc(12px + env(safe-area-inset-bottom,0px)) max(10px,env(safe-area-inset-left,0px));pointer-events:none}
+.nav{position:fixed;z-index:30;left:0;right:0;bottom:0;padding:0 max(10px,env(safe-area-inset-right,0px)) var(--nav-b) max(10px,env(safe-area-inset-left,0px));pointer-events:none}
 .nav-in{max-width:560px;margin:0 auto;display:flex;align-items:center;gap:8px}
 .navbar{pointer-events:auto;flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:2px;background:var(--surface);border-radius:999px;padding:6px;box-shadow:var(--lift)}
 .tab{height:48px;min-width:44px;padding:0 9px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;gap:7px;color:var(--ink-3);font-weight:700;font-size:12.5px;white-space:nowrap}
@@ -475,7 +476,7 @@ body.locked{overflow:hidden}
 @media (max-height:640px){ .lock-pad{gap:10px 22px} .lock-pad button{width:66px;height:66px;font-size:23.5px} .lock-dots{margin:20px 0 24px} }
 
 /* Aviso flotante */
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(92px + env(safe-area-inset-bottom,0px));z-index:60;background:var(--inv-bg);color:var(--inv-ink);border-radius:18px;padding:11px 12px 11px 16px;display:flex;gap:12px;align-items:center;width:max-content;max-width:calc(100% - 32px);box-shadow:var(--lift);font-size:12.5px;font-weight:600}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(70px + var(--nav-b));z-index:60;background:var(--inv-bg);color:var(--inv-ink);border-radius:18px;padding:11px 12px 11px 16px;display:flex;gap:12px;align-items:center;width:max-content;max-width:calc(100% - 32px);box-shadow:var(--lift);font-size:12.5px;font-weight:600}
 .toast button{color:var(--inv-ink);font-weight:800;text-decoration:underline;text-underline-offset:3px;padding:4px 6px}
 @media (prefers-reduced-motion: reduce){ .lock-dots.shake{animation:none} .sheet{animation:none} details.card>summary .chev{transition:none} .mchips{scroll-behavior:auto} }
 @media (max-width:360px){ .tiles,.grid4{gap:10px} .tile,.mini{padding:12px} .grid2{grid-template-columns:1fr} .kpis{gap:8px} .kpi{padding:12px 10px} }
@@ -549,12 +550,15 @@ function parseImporte(str){
 }
 const NF2 = new Intl.NumberFormat('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2,useGrouping:true});
 const NF0 = new Intl.NumberFormat('es-ES',{maximumFractionDigits:0,useGrouping:true});
+/* Con el ojo cerrado, los importes se enseñan como «•••• €» en toda la app */
+let PRIVADO = false;
 function eur(n, o={}){
+  if (PRIVADO) return '••••\u00a0€';
   const dec = o.dec ?? 2; let v = Number(n)||0;
   if (Math.abs(v) < (dec ? 0.005 : 0.5)) v = 0;
   return (v<0 ? '−' : (o.signo && v>0 ? '+' : '')) + (dec ? NF2 : NF0).format(Math.abs(v)) + ' €';
 }
-function kfmt(v){ const a = Math.abs(v); const s = a>=1000 ? (a/1000).toFixed(a>=10000?0:1).replace('.',',')+'k' : String(Math.round(a)); return (v<0 && Math.round(a)>0 ? '−' : '') + s; }
+function kfmt(v){ if (PRIVADO) return '•••'; const a = Math.abs(v); const s = a>=1000 ? (a/1000).toFixed(a>=10000?0:1).replace('.',',')+'k' : String(Math.round(a)); return (v<0 && Math.round(a)>0 ? '−' : '') + s; }
 const fmtIn = n => { const v = Number(n); if (!isFinite(v)) return ''; return v.toFixed(2).replace('.',',').replace(/,00$/,''); };
 
 const esAhorro = c => !!c && (c.tipo==='inversion' || c.tipo==='ahorro');
@@ -917,6 +921,8 @@ const IC = {
   list:'<path d="M6.5 3.5h11v17l-1.8-1.2-1.9 1.2-1.8-1.2-1.8 1.2-1.9-1.2-1.8 1.2z"/><path d="M9.3 8.5h5.4M9.3 12h5.4M9.3 15.5h3.4"/>',
   safe:'<rect x="3.5" y="4.5" width="17" height="14" rx="3"/><circle cx="10.5" cy="11.5" r="2.7"/><path d="M16.5 9.5v4M7 18.5V20M17 18.5V20"/>',
   bars:'<rect x="4" y="11" width="3.6" height="8.5" rx="1.3"/><rect x="10.2" y="4.5" width="3.6" height="15" rx="1.3"/><rect x="16.4" y="8" width="3.6" height="11.5" rx="1.3"/>',
+  eye:'<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff:'<path d="M3.5 3.5l17 17"/><path d="M10.6 5.6c.5-.1.9-.1 1.4-.1 6 0 9.5 6.5 9.5 6.5a16.7 16.7 0 0 1-3.2 4M6.4 6.5C3.9 8.2 2.5 12 2.5 12S6 18.5 12 18.5c1.6 0 3-.4 4.2-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 13.4a7.6 7.6 0 0 0 0-2.8l1.9-1.5-1.9-3.3-2.3.8a7.6 7.6 0 0 0-2.4-1.4L14.3 3h-3.8l-.4 2.2a7.6 7.6 0 0 0-2.4 1.4l-2.3-.8-1.9 3.3 1.9 1.5a7.6 7.6 0 0 0 0 2.8l-1.9 1.5 1.9 3.3 2.3-.8a7.6 7.6 0 0 0 2.4 1.4l.4 2.2h3.8l.4-2.2a7.6 7.6 0 0 0 2.4-1.4l2.3.8 1.9-3.3z"/>',
   search:'<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
   plus:'<path d="M12 5v14M5 12h14"/>',
@@ -961,6 +967,7 @@ function vTop(t, o = {}){
   return `<header class="top">${lead}<div class="top-t"><h1 class="${o.greet ? 'greet' : ''}">${t}</h1>${o.sub ? `<p class="sub">${o.sub}</p>` : ''}</div><div class="top-a">${o.acts || ''}</div></header>`;
 }
 const btnAjustes = () => `<button class="rbtn" data-act="ajustes" aria-label="Ajustes">${ic('gear')}</button>`;
+const btnOjo = () => `<button class="rbtn ${PRIVADO ? 'on' : ''}" data-act="privado" aria-pressed="${PRIVADO}" aria-label="${PRIVADO ? 'Enseñar los importes' : 'Ocultar los importes'}">${ic(PRIVADO ? 'eyeoff' : 'eye')}</button>`;
 function saludo(){ const h = new Date().getHours(); return h < 14 ? 'Buenos días' : h < 21 ? 'Buenas tardes' : 'Buenas noches'; }
 function fechaLarga(iso){ const d = fromISO(iso); return `${cap(DIAS[d.getDay()])}, ${d.getDate()} de ${MESES[d.getMonth()]}`; }
 const fechaDM = iso => { const d = fromISO(iso); return `${d.getDate()} ${MESES_C[d.getMonth()]}`; };
@@ -1076,7 +1083,7 @@ function proximos(hoy, dias = 35){
 function vInicio(){
   if (!S.cfg) return (S.def.cfg || S.mode !== 'db') ? (S.mode === 'cargando' ? vCargando() : vBienvenida()) : vCargando();
   const hoy = hoyISO();
-  return vTop(`${saludo()}, ${esc(S.cfg.nombre)}`, {sub:fechaLarga(hoy), greet:true, acts:btnAjustes()}) + banner() + vHero(hoy) + vNomina(hoy) + vStbyIrpf() + vStbyMini() + vAvisos(hoy) + vUltimos() + vProximos(hoy);
+  return vTop(`${saludo()}, ${esc(S.cfg.nombre)}`, {sub:fechaLarga(hoy), greet:true, acts:btnOjo() + btnAjustes()}) + banner() + vHero(hoy) + vNomina(hoy) + vStbyIrpf() + vStbyMini() + vAvisos(hoy) + vUltimos() + vProximos(hoy);
 }
 function vCargando(){ return vTop('Hola, Jordi', {sub:fechaLarga(hoyISO()), greet:true}) + `<section class="hero" aria-busy="true"><p class="hero-cap">Abriendo tus cuentas…</p><div class="hero-skel"></div></section>`; }
 function vBienvenida(){
@@ -1303,7 +1310,7 @@ function vPatrimonio(){
   const base = Math.max(P.activos, 1), pc = v => Math.min(Math.max(v/base, 0), 1);
   const grp = (act, attrs, icon, cls, n, sub, v, frac, neg) => `<button class="row grp" data-act="${act}" ${attrs}><span class="ico ${cls}">${ic(icon)}</span><span class="r-main"><span class="grp-top"><span class="r-t">${n}</span><span class="r-v ${neg ? 'neg' : ''}">${eur(v)}</span></span><span class="gbar ${neg ? 'deu' : ''}"><i style="width:${(frac*100).toFixed(1)}%"></i></span><span class="grp-s"><span>${sub}</span><span>${(frac*100).toFixed(1).replace('.', ',')} %</span></span></span><span class="chev">${ic('right', 20)}</span></button>`;
   const deuSub = P.deu.length ? (P.deu.length === 1 ? (P.deu[0].e.pendiente > 0 && P.deu[0].e.finYm ? `Terminas en ${mesAnyo(P.deu[0].e.finYm)}` : 'Pagado') : `${P.deu.length} préstamos`) : 'Sin deudas';
-  return vTop('Patrimonio', {acts:`${btnAjustes()}<button class="rbtn acc" data-act="new-cuenta" aria-label="Añadir cuenta">${ic('plus', 22, 2.2)}</button>`}) + banner()
+  return vTop('Patrimonio', {acts:`${btnOjo()}${btnAjustes()}<button class="rbtn acc" data-act="new-cuenta" aria-label="Añadir cuenta">${ic('plus', 22, 2.2)}</button>`}) + banner()
    + `<section class="pat"><p class="kicker">Patrimonio neto</p><p class="pat-big">${eur(P.neto)}</p>
      <p class="pat-chg">${chg != null ? `<b class="${chg < 0 ? 'neg' : ''}">${chg >= 0 ? '↑' : '↓'} ${eur(chg, {signo:true, dec:0})}</b> desde el ${fechaDM(ini.f)}` : fin ? `Dentro de 12 meses, unos <b class="${fin.v < P.neto ? 'neg' : ''}">${eur(fin.v, {dec:0})}</b>` : ''}</p>
      ${s ? `<p class="ptip">Línea continua: real · discontinua: previsto. Toca la gráfica.</p>${pchartSVG(s)}` : ''}</section>
@@ -1384,7 +1391,7 @@ function vAnalisis(){
   const mch = modo === 'futuro' ? '' : `<div class="mchips" role="group" aria-label="Mes">${meses.map(m => `<button data-act="setmes" data-v="${m}" aria-pressed="${m === ym}">${MESES_C[Number(m.slice(5)) - 1]}${m.slice(0, 4) !== cur.slice(0, 4) ? ` ${m.slice(2, 4)}` : ''}</button>`).join('')}</div>`;
   const seg = `<div class="seg" role="group" aria-label="Qué ver">${[['gastos','Gastos'],['ingresos','Ingresos'],['futuro','Futuro']].map(([v,l]) => `<button data-act="ana" data-v="${v}" aria-pressed="${modo === v}">${l}</button>`).join('')}</div>`;
   const body = modo === 'futuro' ? vFuturo() : modo === 'ingresos' ? vAnaIngresos(ym, cur, hoy) : vAnaGastos(ym, cur, hoy);
-  return vTop('Análisis', {acts:btnAjustes()}) + banner() + mch + seg + body;
+  return vTop('Análisis', {acts:btnOjo() + btnAjustes()}) + banner() + mch + seg + body;
 }
 function comparaMes(v, ym, campo){
   const pm = addMonths(ym, -1), first = primerMes(); if (!first || pm < first) return '';
@@ -2636,6 +2643,7 @@ const ACT = {
   'anotar-nomina': b => { const rc = S.recs.find(x => x.id === b.dataset.id); if (!rc) return; const p = nominaPendiente(rc, hoyISO()) || {}; sheetMov(null, {tipo:'ingreso', cat:rc.cat, cuenta:rc.cuenta, detalle:rc.detalle || 'Nómina', nota: p.ult ? `La última fue de ${eur(p.ult.importe)}.` : `Tu estimación: unos ${eur(rc.importe, {dec:0})}.`}); },
   github: () => sheetGithub(), 'ya-datos': () => sheetYaDatos(),
   pin: b => teclaPin(b.dataset.k), 'pin-del': () => borrarPin(), 'pin-fid': () => entrarFaceId(false),
+  privado: () => { PRIVADO = !PRIVADO; try { local.escribir('privado', PRIVADO || null); } catch {} render(); },
   codigo: () => sheetCodigo(), 'codigo-cambiar': () => sheetCodigo('cambiar'), 'codigo-quitar': () => sheetCodigo('quitar'), 'codigo-poner': () => sheetCodigo('poner'), faceid: () => sheetFaceId(),
   undo: () => { const u = toastUndo; toastUndo = null; $('#toast').hidden = true; if (u) u(); },
 };
@@ -2758,6 +2766,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 /* ===== Arranque ===== */
 async function init(){
+  PRIVADO = local.leer('privado') === true;
   bloquear();
   render();
   const use = n => (window.claude && typeof window.claude.use === 'function') ? window.claude.use(n).catch(() => null) : Promise.resolve(null);
