@@ -80,18 +80,18 @@ b{font-weight:700}
 .wrap{max-width:560px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:10px calc(96px + var(--nav-b));display:grid;gap:14px}
 
 /* Cabecera */
-.top{display:flex;align-items:center;gap:12px;padding-top:6px;min-height:52px}
-/* En iPhones estrechos, la cabecera se compacta para que el título y los botones quepan sin salirse */
-.top{min-width:0}
-@media (max-width:380px){.top{gap:10px}.top-a{gap:6px}.top-a .rbtn{width:38px;height:38px}.top > .avatar{width:40px;height:40px;font-size:13.5px}}
+.top{display:flex;align-items:center;gap:10px;padding-top:6px;min-height:52px;min-width:0}
+/* Los botones redondos de arriba miden lo mismo en todas las pantallas */
+.top .rbtn{width:38px;height:38px}
+/* En iPhones estrechos, el círculo de las iniciales se encoge para que el título quepa */
+@media (max-width:380px){.top > .avatar{width:40px;height:40px;font-size:13.5px}}
 @media (max-width:340px){.top > .avatar{display:none}}
-@media (max-width:400px){.top:has(.top-a > :nth-child(3)){gap:10px}.top-a:has(> :nth-child(3)){gap:6px}.top-a:has(> :nth-child(3)) .rbtn{width:38px;height:38px}}
 .avatar{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:800;font-size:14.5px;letter-spacing:.03em}
 .top-t{flex:1;min-width:0}
 .top h1{font-weight:800;font-size:clamp(22.5px,6.7vw,28px);letter-spacing:-.03em;line-height:1.08;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .top h1.greet{font-size:clamp(17px,4.9vw,20px);letter-spacing:-.02em}
 .top .sub{color:var(--ink-2);font-size:12.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.top-a{display:flex;gap:8px;flex:none}
+.top-a{display:flex;gap:6px;flex:none}
 .rbtn{flex:none;width:42px;height:42px;border-radius:50%;background:var(--surface);box-shadow:var(--shadow);display:grid;place-items:center;color:var(--ink)}
 .rbtn.on{background:var(--accent-soft);color:var(--accent)}
 .rbtn.acc{background:var(--accent);color:var(--accent-ink)}
