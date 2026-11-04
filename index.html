@@ -1315,7 +1315,7 @@ function vPatrimonio(){
   const base = Math.max(P.activos, 1), pc = v => Math.min(Math.max(v/base, 0), 1);
   const grp = (act, attrs, icon, cls, n, sub, v, frac, neg) => `<button class="row grp" data-act="${act}" ${attrs}><span class="ico ${cls}">${ic(icon)}</span><span class="r-main"><span class="grp-top"><span class="r-t">${n}</span><span class="r-v ${neg ? 'neg' : ''}">${eur(v)}</span></span><span class="gbar ${neg ? 'deu' : ''}"><i style="width:${(frac*100).toFixed(1)}%"></i></span><span class="grp-s"><span>${sub}</span><span>${(frac*100).toFixed(1).replace('.', ',')} %</span></span></span><span class="chev">${ic('right', 20)}</span></button>`;
   const deuSub = P.deu.length ? (P.deu.length === 1 ? (P.deu[0].e.pendiente > 0 && P.deu[0].e.finYm ? `Terminas en ${mesAnyo(P.deu[0].e.finYm)}` : 'Pagado') : `${P.deu.length} préstamos`) : 'Sin deudas';
-  return vTop('Patrimonio', {acts:`${btnOjo()}${btnAjustes()}<button class="rbtn acc" data-act="new-cuenta" aria-label="Añadir cuenta">${ic('plus', 22, 2.2)}</button>`}) + banner()
+  return vTop('Patrimonio', {acts:btnOjo() + btnAjustes()}) + banner()
    + `<section class="pat"><p class="kicker">Patrimonio neto</p><p class="pat-big">${eur(P.neto)}</p>
      <p class="pat-chg">${chg != null ? `<b class="${chg < 0 ? 'neg' : ''}">${chg >= 0 ? '↑' : '↓'} ${eur(chg, {signo:true, dec:0})}</b> desde el ${fechaDM(ini.f)}` : fin ? `Dentro de 12 meses, unos <b class="${fin.v < P.neto ? 'neg' : ''}">${eur(fin.v, {dec:0})}</b>` : ''}</p>
      ${s ? `<p class="ptip">Línea continua: real · discontinua: previsto. Toca la gráfica.</p>${pchartSVG(s)}` : ''}</section>
