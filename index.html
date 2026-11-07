@@ -133,6 +133,7 @@ b{font-weight:700}
 .hero-foot b{font-size:clamp(15.5px,4.5vw,18px);font-weight:800;color:var(--hero-ink);margin-left:6px;font-variant-numeric:tabular-nums}
 .hero-foot b.p{color:var(--hero-pos)}
 .hero-note{font-size:11.5px;color:var(--hero-warn);margin-top:10px}
+.hero-adel{display:inline-flex;align-items:center;gap:6px;justify-self:start;margin-top:14px;min-height:36px;padding:0 14px;border-radius:999px;font-size:13px;font-weight:700;color:var(--hero-ink);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.28);cursor:pointer}
 .hero-btn{justify-self:start;margin-top:18px;background:var(--hero-ink);color:var(--hero-1);min-height:44px;padding:0 22px;border-radius:999px;font-weight:800}
 .hero-acts{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
 .hero-acts .hero-btn{margin-top:0}
@@ -584,6 +585,11 @@ function recargasEntre(desdeExcl, hastaIncl, dia){
 }
 const recargasEnMes = (ym, dia) => recargasEntre(addDays(ym+'-01', -1), `${ym}-${pad(diasMes(ym))}`, dia);
 
+/* Adelanto del sobre: un traspaso a la tarjeta con «adelanto» = el día de recarga de la semana a la que se lo quitas.
+   Esa semana, el sobre y su recarga son de menos (155 − lo adelantado) */
+const adelantoA = (movs, fecha) => r2(movs.reduce((a,m) => a + (m.tipo === 'traspaso' && m.adelanto === fecha ? m.importe : 0), 0));
+const adelantosEntre = (movs, desdeExcl, hastaIncl) => r2(movs.reduce((a,m) => a + (m.tipo === 'traspaso' && m.adelanto && m.adelanto > desdeExcl && m.adelanto <= hastaIncl ? m.importe : 0), 0));
+
 /* Saldo de una cuenta = saldo base + movimientos posteriores + recargas automáticas del sobre */
 function saldoCuenta(c, movs, sobre, hoy){
   if (!c) return 0;
@@ -598,6 +604,8 @@ function saldoCuenta(c, movs, sobre, hoy){
   if (sobre && sobre.importe > 0 && (c.id===sobre.cuenta || c.id===sobre.origen) && sobre.cuenta !== sobre.origen){
     const n = recargasEntre(fb, hoy, sobre.dia);
     if (c.id===sobre.cuenta) s += n*sobre.importe; else s -= n*sobre.importe;
+    /* Las recargas de las semanas con adelanto fueron de menos: ese dinero ya entró antes en la tarjeta */
+    const ad = adelantosEntre(movs, fb, hoy); if (c.id===sobre.cuenta) s -= ad; else s += ad;
   }
   return r2(s);
 }
@@ -611,8 +619,9 @@ function estadoSobre(sobre, movs, hoy){
     else if (m.tipo==='ingreso' && m.cuenta===sobre.cuenta) entradas += m.importe;
     else if (m.tipo==='traspaso'){ if (m.hacia===sobre.cuenta) extra += m.importe; if (m.desde===sobre.cuenta) extra -= m.importe; }
   }
-  const disponible = r2(sobre.importe + extra + entradas), queda = r2(disponible - gastado), diasRest = diffDays(hoy, prox);
-  return {ini, fin, prox, gastado:r2(gastado), extra:r2(extra), entradas:r2(entradas), disponible, queda, diasRest, porDia: diasRest>0 ? r2(Math.max(queda,0)/diasRest) : 0};
+  const adelDe = adelantoA(movs, ini), adelProx = adelantoA(movs, prox);
+  const disponible = r2(sobre.importe - adelDe + extra + entradas), queda = r2(disponible - gastado), diasRest = diffDays(hoy, prox);
+  return {ini, fin, prox, adelDe, adelProx, gastado:r2(gastado), extra:r2(extra), entradas:r2(entradas), disponible, queda, diasRest, porDia: diasRest>0 ? r2(Math.max(queda,0)/diasRest) : 0};
 }
 
 function resumenMes(ym, movs, cuentas){
@@ -680,7 +689,7 @@ function habitualMes(ym, ctx, f = 1){
     else if (rc.tipo==='traspaso' && huchas && huchas.has(rc.hacia)) gFijo += rc.importe; }
   const mes = Number(ym.slice(5)), su = cfg.sueldo || {};
   const extra = (Number(su.pagas)===14 && (su.meses||[6,12]).includes(mes)) ? (Number(su.extra)||0) : 0;
-  const sb = cfg.sobre || {}; const sobre = sb.importe > 0 ? sb.importe * recargasEnMes(ym, Number(sb.dia)||0) : 0;
+  const sb = cfg.sobre || {}; const sobre = sb.importe > 0 ? Math.max(sb.importe * recargasEnMes(ym, Number(sb.dia)||0) + (ctx.adelMes ? ctx.adelMes(ym) : 0), 0) : 0;
   let plIng = 0, plGas = 0;
   for (const p of plans){ if (!planEnMes(p, ym)) continue; if (p.tipo==='ingreso') plIng += p.importe; else plGas += p.importe; }
   const gas = gFijo + (gVar + sobre)*f;
@@ -776,7 +785,9 @@ function estNomina(rc){
 }
 /* Fin previsto de cada préstamo, para que la proyección deje de contar la cuota cuando se acaba */
 const deudasCtx = () => { const hoy = hoyISO(), o = {}; for (const d of S.deudas){ const e = estadoDeuda(d, S.movs, hoy); o[d.id] = {fin:e.finYm, ultima:e.ultima, pagado:!(e.pendiente > 0.005)}; } return o; };
-const ctx = () => ({recs:S.recs, plans:S.plans, cfg:S.cfg, deudas:deudasCtx(), realIng:(rc, ym) => rc.cat ? r2(S.movs.reduce((a,m) => a + (m.tipo === 'ingreso' && m.cat === rc.cat && mesDe(m) === ym ? m.importe : 0), 0)) : 0, estVar:Object.fromEntries(S.recs.filter(r => r.variable && r.tipo === 'ingreso').map(r => [r.id, estNomina(r).v])), huchas:huchasGasto()});
+/* Si adelantas a otro mes, ese sobre pasa de un mes al otro */
+const adelMes = ym => r2(S.movs.reduce((a,m) => a + (m.tipo === 'traspaso' && m.adelanto ? (ymOf(m.fecha) === ym ? m.importe : 0) - (ymOf(m.adelanto) === ym ? m.importe : 0) : 0), 0));
+const ctx = () => ({recs:S.recs, plans:S.plans, cfg:S.cfg, deudas:deudasCtx(), adelMes, realIng:(rc, ym) => rc.cat ? r2(S.movs.reduce((a,m) => a + (m.tipo === 'ingreso' && m.cat === rc.cat && mesDe(m) === ym ? m.importe : 0), 0)) : 0, estVar:Object.fromEntries(S.recs.filter(r => r.variable && r.tipo === 'ingreso').map(r => [r.id, estNomina(r).v])), huchas:huchasGasto()});
 const saldo = c => saldoCuenta(c, S.movs, S.cfg?.sobre, hoyISO());
 const ordenCuentas = () => [...S.cuentas].sort((a,b) => (ORD[a.tipo]??9) - (ORD[b.tipo]??9) || (a.orden||0) - (b.orden||0) || a.nombre.localeCompare(b.nombre));
 /* Mes desde el que cuenta la app: lo anterior no sale en Análisis, Futuro, Movimientos ni Patrimonio, aunque sigue guardado.
@@ -973,7 +984,8 @@ function vTop(t, o = {}){
 }
 const btnAjustes = () => `<button class="rbtn" data-act="ajustes" aria-label="Ajustes">${ic('gear')}</button>`;
 const btnOjo = () => `<button class="rbtn ${PRIVADO ? 'on' : ''}" data-act="privado" aria-pressed="${PRIVADO}" aria-label="${PRIVADO ? 'Enseñar los importes' : 'Ocultar los importes'}">${ic(PRIVADO ? 'eyeoff' : 'eye')}</button>`;
-function saludo(){ const h = new Date().getHours(); return h < 14 ? 'Buenos días' : h < 21 ? 'Buenas tardes' : 'Buenas noches'; }
+/* Buenos días de 6 a 14, buenas tardes de 14 a 21 y buenas noches el resto, madrugada incluida */
+function saludo(){ const h = new Date().getHours(); return h < 6 ? 'Buenas noches' : h < 14 ? 'Buenos días' : h < 21 ? 'Buenas tardes' : 'Buenas noches'; }
 function fechaLarga(iso){ const d = fromISO(iso); return `${cap(DIAS[d.getDay()])}, ${d.getDate()} de ${MESES[d.getMonth()]}`; }
 const fechaDM = iso => { const d = fromISO(iso); return `${d.getDate()} ${MESES_C[d.getMonth()]}`; };
 const eurK = v => eur(v, {dec: Math.abs(v) >= 1000 ? 0 : 2});
@@ -1013,7 +1025,7 @@ function porPagar(ym, hoy){
     items.push({fecha:f, nombre:rc.detalle || catNombre(rc.cat), importe:imp, cat:rc.cat, tipo:'gasto'});
   }
   const sb = S.cfg.sobre;
-  if (sb.importe > 0 && sb.cuenta){ for (let d = ym > ymOf(hoy) ? `${ym}-01` : addDays(hoy, 1); d <= fin; d = addDays(d, 1)) if (fromISO(d).getDay() === sb.dia) items.push({fecha:d, nombre:'Recarga del sobre', importe:sb.importe, tipo:'gasto', sobre:true}); }
+  if (sb.importe > 0 && sb.cuenta){ for (let d = ym > ymOf(hoy) ? `${ym}-01` : addDays(hoy, 1); d <= fin; d = addDays(d, 1)) if (fromISO(d).getDay() === sb.dia){ const ad = adelantoA(S.movs, d), imp = r2(sb.importe - ad); if (imp > 0) items.push({fecha:d, nombre: ad > 0 ? `Recarga del sobre (adelantaste ${eur(ad)})` : 'Recarga del sobre', importe:imp, tipo:'gasto', sobre:true}); } }
   items.sort((a,b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
   return {items, total:r2(items.reduce((a,x) => a + x.importe, 0))};
 }
@@ -1048,7 +1060,7 @@ function sobraMes(hoy){
     else if (ahorro(rc.hacia) && !ahorro(rc.desde)) M.pendAhorro += imp;
   }
   /* El sobre, como si lo gastaras entero: lo que queda de esta semana y las recargas que faltan del mes */
-  if (sb.importe > 0 && sb.cuenta) M.sobre = Math.max(sobreSemana(hoy).queda, 0) + recargasEntre(hoy, fin, Number(sb.dia) || 0)*sb.importe;
+  if (sb.importe > 0 && sb.cuenta) M.sobre = Math.max(sobreSemana(hoy).queda, 0) + recargasEntre(hoy, fin, Number(sb.dia) || 0)*sb.importe - adelantosEntre(S.movs, hoy, fin);
   for (const pl of S.plans) if (planEnMes(pl, ym)){ if (pl.tipo === 'ingreso') M.pendIng += pl.importe; else M.plan += pl.importe; }
   for (const k of Object.keys(M)) M[k] = r2(M[k]);
   M.pend = r2(M.pendFijos + M.pendHuchas + M.sobre + M.plan);
@@ -1114,7 +1126,7 @@ function vHero(hoy){
       <p class="hero-sub">${e.aMitad && !over ? `${e.queda > 0 ? `Unos ${eur(e.porDia)} al día hasta el ${DIAS[sb.dia]}. ` : `El ${DIAS[sb.dia]} recargas ${eur(sb.importe)}. `}Esta semana cuenta lo que hay en la tarjeta, porque pusiste su saldo a mitad de semana.` : over ? `Por encima de los ${eur(e.disponible)} del sobre. Hasta el ${DIAS[sb.dia]}, lo que gastes sale de otro sitio.` : e.queda > 0 ? `Unos ${eur(e.porDia)} al día hasta el ${DIAS[sb.dia]}` : 'Sobre gastado. Recargas el ' + DIAS[sb.dia] + '.'}</p>
       ${timeline(7, idx, fechaCorta(e.ini).replace(/ \w+$/, ''), fechaCorta(e.fin).replace(/ \w+$/, ''), `Hoy · ${DIAS_C[fromISO(hoy).getDay()]}`)}
       <div class="hero-foot"><span>Sobre<b>${eur(e.disponible)}</b></span><span>Gastado<b>${eur(-e.gastado)}</b></span></div>
-      ${heroExtra(sb, e)}
+      ${heroExtra(sb, e)}${heroAdelanto(sb, e, hoy)}
     </section>`;
   }
   const ym = ymOf(hoy), dia = Number(hoy.slice(8)), dRest = diasMes(ym) - dia, M = sobraMes(hoy), over = M.sobra < 0;
@@ -1129,9 +1141,16 @@ function vHero(hoy){
     <div class="hero-foot"><span>Ingresos<b class="p">${eur(r2(M.ing + M.pendIng), {signo:true})}</b></span><span>Gastado y apartado<b>${eur(-r2(M.gas + M.huchas))}</b></span></div>
   </section>`;
 }
+/* Lo adelantado: lo que se te quita esta semana, lo que adelantaste de la que viene y el botón para hacerlo */
+function heroAdelanto(sb, e, hoy){
+  const dia = DIAS[sb.dia], recDe = r2(sb.importe - e.adelDe), recProx = r2(sb.importe - e.adelProx);
+  const de = e.adelDe > 0 ? `<p class="hero-sub">${hoy === e.ini ? `Hoy te pasas ${eur(recDe)} a la tarjeta, no ${eur(sb.importe)}` : `El ${dia} te pasaste ${eur(recDe)} a la tarjeta`}: adelantaste ${eur(e.adelDe)} la semana pasada.</p>` : '';
+  const prox = e.adelProx > 0 ? `<p class="hero-sub">Has adelantado ${eur(e.adelProx)} del sobre de la semana que viene: el ${dia} solo te pasas ${eur(recProx)}.</p>` : '';
+  return de + prox + `<button class="hero-adel" data-act="adelanto">${ic(e.adelProx > 0 ? 'arrows' : 'arrowin', 15, 2.2)}${e.adelProx > 0 ? 'Cambiar el adelanto' : 'Adelantar de la semana que viene'}</button>`;
+}
 function heroExtra(sb, e){
   const cm = ctasMap(); let ah = 0, otro = 0;
-  for (const m of S.movs){ if (m.tipo !== 'traspaso' || m.hacia !== sb.cuenta || m.fecha < e.ini || m.fecha > e.fin) continue; if (esAhorro(cm[m.desde])) ah += m.importe; else otro += m.importe; }
+  for (const m of S.movs){ if (m.tipo !== 'traspaso' || m.hacia !== sb.cuenta || m.fecha < e.ini || m.fecha > e.fin || m.adelanto) continue; if (esAhorro(cm[m.desde])) ah += m.importe; else otro += m.importe; }
   return (ah > 0 ? `<p class="hero-note">Esta semana has sacado ${eur(ah)} de tu ahorro para la tarjeta.</p>` : '') + (otro > 0 ? `<p class="hero-sub">Esta semana han entrado ${eur(otro)} más en la tarjeta, de huchas u otras cuentas.</p>` : '');
 }
 const nombreRec = rc => rc.cat === 'nomina' ? 'la nómina' : `«${esc(rc.detalle || catNombre(rc.cat))}»`;
@@ -1875,6 +1894,40 @@ function sheetObj(o, preset){
 }
 
 /* Sobre */
+/* Adelantar parte del sobre de la semana que viene: un traspaso a la tarjeta ahora, que esa semana se descuenta del sobre y de su recarga.
+   Un adelanto por semana (id adel-<día de recarga>): volver a abrirlo lo cambia o lo quita */
+function sheetAdelanto(m){
+  const sb = S.cfg.sobre, hoy = hoyISO(), ref = m ? m.fecha : hoy, e = sobreSemana(ref), prox = m ? m.adelanto : e.prox;
+  const id = 'adel-' + prox, prev = m || S.movs.find(x => x.id === id), ya = prev ? prev.importe : 0, actual = e.ini === weekStart(hoy, sb.dia);
+  const sug = ya || (e.queda < 0 ? Math.ceil(-e.queda) : 0);
+  openSheet(prev ? 'Adelanto del sobre' : 'Adelantar del próximo sobre', `<form id="fAdel" class="form" novalidate>
+    <p class="hint" style="margin:0">Pasa ahora a la tarjeta parte del sobre de la semana que viene. ${actual ? 'Esta semana tendrás más' : 'Esa semana tuviste más'} y la siguiente, menos: el ${DIAS[sb.dia]} ${fechaDM(prox)} solo te pasarás lo que falte hasta ${eur(sb.importe)}.</p>
+    <div class="fld"><label for="adImp">¿Cuánto adelantas?</label><div class="amount"><input id="adImp" inputmode="decimal" placeholder="0" value="${sug ? fmtIn(sug) : ''}"><span>€</span></div><span class="note">Sale de ${esc(ctaNombre(prev?.desde || sb.origen))}, como la recarga. Como mucho, ${eur(sb.importe)}.</span></div>
+    <div class="calc" id="adCalc"></div>
+    <p class="err" role="alert"></p>
+    <div class="actions"><button type="button" class="btn ghost" data-act="close">Cancelar</button><button type="submit" class="btn primary" id="adGo">Adelantar</button></div>
+    ${prev ? '<button type="button" class="btn danger" id="adDel">Quitar el adelanto</button>' : ''}
+  </form>`, root => {
+    const q = x => root.querySelector(x);
+    const calc = () => {
+      const v = parseImporte(q('#adImp').value) || 0, d = r2(v - ya), rec = r2(sb.importe - v);
+      q('#adCalc').innerHTML = `<dl>${actual ? `<div><dt>Te queda esta semana</dt><dd>${eur(r2(e.queda + d))}</dd></div>` : `<div><dt>Sobre de la semana del ${fechaDM(e.ini)}</dt><dd>${eur(r2(e.disponible + d))}</dd></div>`}
+        <div class="tot"><dt>${DIAS[sb.dia] ? cap(DIAS[sb.dia]) : 'Recarga'} ${fechaDM(prox)}: te pasas</dt><dd>${eur(Math.max(rec, 0))}</dd></div></dl>`;
+      q('#adGo').textContent = v > 0 ? `${prev ? 'Guardar' : 'Adelantar'} ${eur(v)}` : (prev ? 'Guardar' : 'Adelantar');
+    };
+    q('#adImp').addEventListener('input', calc); calc();
+    if (!prev) setTimeout(() => q('#adImp')?.focus(), 80);
+    q('#fAdel').addEventListener('submit', ev => {
+      ev.preventDefault(); const err = q('.err'), v = parseImporte(q('#adImp').value); err.textContent = '';
+      if (!(v > 0)){ err.textContent = 'Escribe un importe mayor que cero.'; return; }
+      if (v > sb.importe){ err.textContent = `Como mucho puedes adelantar el sobre entero: ${eur(sb.importe)}.`; return; }
+      closeSheet();
+      guardar(() => store.set('mov', id, {fecha:prev?.fecha || hoy, tipo:'traspaso', importe:r2(v), detalle:`Adelanto del sobre del ${fechaDM(prox)}`, cat:null, cuenta:null, desde:prev?.desde || sb.origen, hacia:sb.cuenta, rec:null, mes:null, adelanto:prox, creado:prev?.creado || new Date().toISOString()}),
+        `Adelantados ${eur(v)}: el ${DIAS[sb.dia]} te pasas ${eur(r2(sb.importe - v))}`);
+    });
+    const del = q('#adDel'); if (del) armar(del, 'Toca otra vez para quitarlo', () => { closeSheet(); guardar(() => store.del('mov', prev.id), `Adelanto quitado: el ${DIAS[sb.dia]} te pasas ${eur(sb.importe)}`); });
+  });
+}
 function sheetSobre(){
   const c = S.cfg, sb = c.sobre, f = fijosMes(ymOf(hoyISO()));
   openSheet('Sobre semanal', `<form id="fSobre" class="form" novalidate>
@@ -2624,7 +2677,7 @@ const ACT = {
   mes: b => { const cur = ymOf(hoyISO()); const n = addMonths(S.mes || cur, Number(b.dataset.d)); if (n > addMonths(cur, 1)) return; S.mes = n === cur ? null : n; render(); },
   close: () => closeSheet(),
   'new-mov': () => S.cfg ? sheetMov() : sheetSetup(),
-  'edit-mov': b => { const m = S.movs.find(x => x.id === b.dataset.id); if (!m) return; const t = m.stby && S.stby.find(x => x.id === m.stby); if (t) sheetStby(t); else sheetMov(m); },
+  'edit-mov': b => { const m = S.movs.find(x => x.id === b.dataset.id); if (!m) return; const t = m.stby && S.stby.find(x => x.id === m.stby); if (t) sheetStby(t); else if (m.adelanto) sheetAdelanto(m); else sheetMov(m); },
   stby: () => ir('stby', true),
   'new-stby': () => S.cfg ? sheetStby() : sheetSetup(),
   'edit-stby': b => { const t = S.stby.find(x => x.id === b.dataset.id); if (t) sheetStby(t); },
@@ -2644,7 +2697,7 @@ const ACT = {
   'ver-movs': () => ir('movimientos', false),
   'export-json': () => exportar('json'), 'export-csv': () => exportar('csv'),
   reset: () => sheetReset(),
-  cartera: () => sheetCartera(),
+  cartera: () => sheetCartera(), adelanto: () => sheetAdelanto(),
   'anotar-nomina': b => { const rc = S.recs.find(x => x.id === b.dataset.id); if (!rc) return; const p = nominaPendiente(rc, hoyISO()) || {}; sheetMov(null, {tipo:'ingreso', cat:rc.cat, cuenta:rc.cuenta, detalle:rc.detalle || 'Nómina', nota: p.ult ? `La última fue de ${eur(p.ult.importe)}.` : `Tu estimación: unos ${eur(rc.importe, {dec:0})}.`}); },
   github: () => sheetGithub(), 'ya-datos': () => sheetYaDatos(),
   pin: b => teclaPin(b.dataset.k), 'pin-del': () => borrarPin(), 'pin-fid': () => entrarFaceId(false),
