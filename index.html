@@ -450,6 +450,7 @@ details.editbox>summary{cursor:pointer;font-weight:700;color:var(--accent);margi
 .nudge{background:var(--accent-soft);box-shadow:none}
 .nudge .muted{color:var(--ink-2)}
 .nudge .btn{justify-self:start}
+.nudge .form select{background-color:var(--surface)}
 .srow2{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;border-bottom:1px solid var(--line)}
 .srow2:last-child{border-bottom:0}
 .srow2 .mrow{border-bottom:0}
@@ -1100,7 +1101,7 @@ function proximos(hoy, dias = 35){
 function vInicio(){
   if (!S.cfg) return (S.def.cfg || S.mode !== 'db') ? (S.mode === 'cargando' ? vCargando() : vBienvenida()) : vCargando();
   const hoy = hoyISO();
-  return vTop(`${saludo()}, ${esc(S.cfg.nombre)}`, {sub:fechaLarga(hoy), greet:true, acts:btnOjo() + btnAjustes()}) + banner() + vHero(hoy) + vNomina(hoy) + vStbyIrpf() + vStbyMini() + vAvisos(hoy) + vUltimos() + vProximos(hoy);
+  return vTop(`${saludo()}, ${esc(S.cfg.nombre)}`, {sub:fechaLarga(hoy), greet:true, acts:btnOjo() + btnAjustes()}) + banner() + vHero(hoy) + vSobrante(hoy) + vNomina(hoy) + vStbyIrpf() + vStbyMini() + vAvisos(hoy) + vUltimos() + vProximos(hoy);
 }
 function vCargando(){ return vTop('Hola, Jordi', {sub:fechaLarga(hoyISO()), greet:true}) + `<section class="hero" aria-busy="true"><p class="hero-cap">Abriendo tus cuentas…</p><div class="hero-skel"></div></section>`; }
 function vBienvenida(){
@@ -1147,6 +1148,33 @@ function heroAdelanto(sb, e, hoy){
   const de = e.adelDe > 0 ? `<p class="hero-sub">${hoy === e.ini ? `Hoy te pasas ${eur(recDe)} a la tarjeta, no ${eur(sb.importe)}` : `El ${dia} te pasaste ${eur(recDe)} a la tarjeta`}: adelantaste ${eur(e.adelDe)} la semana pasada.</p>` : '';
   const prox = e.adelProx > 0 ? `<p class="hero-sub">Has adelantado ${eur(e.adelProx)} del sobre de la semana que viene: el ${dia} solo te pasas ${eur(recProx)}.</p>` : '';
   return de + prox + `<button class="hero-adel" data-act="adelanto">${ic(e.adelProx > 0 ? 'arrows' : 'arrowin', 15, 2.2)}${e.adelProx > 0 ? 'Cambiar el adelanto' : 'Adelantar de la semana que viene'}</button>`;
+}
+/* Lo que sobró del sobre la semana pasada. Si lo apartas, va con fecha del último día de esa semana:
+   así sale de lo que sobró y no del sobre de esta. Si lo dejas en la tarjeta, cuenta como lo que te sobra este mes */
+function sobranteSemana(hoy){
+  const sb = S.cfg.sobre; if (!(sb.importe > 0 && sb.cuenta)) return null;
+  const ini = addDays(weekStart(hoy, sb.dia), -7), t = S.cuentas.find(c => c.id === sb.cuenta);
+  if (ini < inicioApp() + '-01' || !t || (t.fechaBase && t.fechaBase > ini) || S.cfg.sobraVista === ini) return null;
+  const e = estadoSobre(sb, S.movs, ini), huchas = ordenCuentas().filter(c => (c.tipo === 'hucha' || esAhorro(c)) && c.id !== sb.cuenta && c.id !== sb.origen);
+  return e.queda >= 0.01 && huchas.length ? {e, huchas} : null;
+}
+function vSobrante(hoy){
+  const x = sobranteSemana(hoy); if (!x) return '';
+  const {e, huchas} = x, pre = huchas.some(c => c.id === S.cfg.sobraHucha) ? S.cfg.sobraHucha : huchas[0].id;
+  return `<section class="card nudge"><div style="display:grid;gap:6px"><h2 class="big">Te sobraron ${eur(e.queda)} del sobre</h2>
+    <p class="muted">De la semana del ${fechaDM(e.ini)} al ${fechaDM(e.fin)}. ¿Los apartas en una hucha? Si los dejas en la tarjeta, cuentan como lo que te sobra este mes.</p></div>
+    <div class="form"><div class="fld"><label for="sobHucha">¿En cuál?</label><select id="sobHucha">${huchas.map(c => `<option value="${esc(c.id)}" ${c.id === pre ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}</select></div></div>
+    <div class="recbtns"><button class="btn primary" data-act="sobra-si">Apartar ${eur(e.queda)}</button><button class="btn ghost" data-act="sobra-no">Dejarlos en la tarjeta</button></div></section>`;
+}
+async function cerrarSobrante(apartar){
+  const x = sobranteSemana(hoyISO()); if (!x) return;
+  const {e} = x, sb = S.cfg.sobre, hacia = $('#sobHucha')?.value;
+  if (apartar && hacia){
+    await guardar(async () => {
+      await store.set('mov', 'sobra-' + e.ini, {fecha:e.fin, tipo:'traspaso', importe:e.queda, detalle:'Lo que sobró del sobre', cat:null, cuenta:null, desde:sb.cuenta, hacia, rec:null, mes:null, creado:new Date().toISOString()});
+      await store.setCfg({...S.cfg, sobraHucha:hacia});
+    }, `Apartados ${eur(e.queda)} en ${ctaNombre(hacia)}`);
+  } else await guardar(() => store.setCfg({...S.cfg, sobraVista:e.ini}), 'Se quedan en la tarjeta');
 }
 function heroExtra(sb, e){
   const cm = ctasMap(); let ah = 0, otro = 0;
@@ -2683,7 +2711,7 @@ const ACT = {
   'edit-stby': b => { const t = S.stby.find(x => x.id === b.dataset.id); if (t) sheetStby(t); },
   'inicio-app': () => sheetInicio(),
   'cobrar-stby': b => sheetCobro(String(b.dataset.ids || '').split(',')),
-  'irpf-si': () => cerrarIrpf(true), 'irpf-no': () => cerrarIrpf(false),
+  'irpf-si': () => cerrarIrpf(true), 'irpf-no': () => cerrarIrpf(false), 'sobra-si': () => cerrarSobrante(true), 'sobra-no': () => cerrarSobrante(false),
   setup: () => sheetSetup(),
   'sheet-sobre': () => sheetSobre(), 'sheet-sueldo': () => sheetSueldo(), 'sheet-cats': () => sheetCats(),
   'new-rec': b => sheetRec(null, b.dataset.t), 'edit-rec': b => { const r = S.recs.find(x => x.id === b.dataset.id); if (r) sheetRec(r); },
