@@ -454,8 +454,6 @@ details.editbox>summary{cursor:pointer;font-weight:700;color:var(--accent);margi
 .srow2{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;border-bottom:1px solid var(--line)}
 .srow2:last-child{border-bottom:0}
 .srow2 .mrow{border-bottom:0}
-.copyrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
-.form .copyrow input{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px}
 .pasos{display:grid;gap:10px;margin:0;padding-left:22px;font-size:13px}
 .pasos li::marker{font-weight:700;color:var(--accent)}
 .lead{font-size:13px;color:var(--ink-2)}
@@ -868,7 +866,6 @@ function after(){
   S.movs.sort(ordenMovs);
   schedule();
   if (S.cfg && !S.generado && S.def.cfg && S.def.rec && S.def.mov){ S.generado = true; generarRecurrentes(); }
-  if (S.cfg && S.def.mov && !S.carteraLista){ S.carteraLista = true; setTimeout(abrirDesdeCartera, 80); }
   /* La primera vez, deja guardado el mes de inicio para que no cambie con el tiempo */
   if (S.cfg && !S.cfg.inicio && S.def.cfg && S.def.cuentas && S.cuentas.length && !S.inicioFijado){ S.inicioFijado = true; store.setCfg({...S.cfg, inicio:inicioDerivado()}).catch(e => console.warn(e)); }
 }
@@ -1573,7 +1570,6 @@ function vAjustes(){
      ${row('fijos', 'Fijos de cada mes', `${S.recs.length} ${S.recs.length === 1 ? 'fijo' : 'fijos'}`)}
      ${row('stby', 'STBY', stbyResumenTxt())}
      ${row('inicio-app', 'La app cuenta desde', 'Lo anterior no sale en Análisis, Futuro ni Patrimonio', cap(mesAnyo(inicioApp())))}
-     ${row('cartera', 'Pagos con la Cartera del iPhone', 'Al pagar con el móvil, se abre el gasto ya relleno')}
    </div></section>
    <section class="card"><h2>Seguridad</h2><div>
      ${row('codigo', 'Código de acceso', pinActual() ? 'Lo pide al abrir la app' : 'La app se abre sin pedir nada', pinActual() ? 'Activado' : 'Desactivado')}
@@ -2228,60 +2224,6 @@ function sheetCobro(ids){
   });
 }
 
-/* Pagos con la Cartera del iPhone: un atajo abre la app con #gasto~IMPORTE~COMERCIO[~CUENTA] */
-const ARTIFACT_URL = 'https://claude.ai/artifact/8fCZYDDAtEVz6MUyC1g6Ay';
-const CARTERA_REGEX = '[^A-Za-z0-9.~-]+';
-const appUrl = () => S.mode === 'db' ? ARTIFACT_URL : location.href.split('#')[0];
-const bonito = s => String(s || '').trim().toLowerCase().replace(/(^|\s)(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
-function leerHashCartera(){
-  let h = ''; try { h = decodeURIComponent((location.hash || '').slice(1)); } catch { h = (location.hash || '').slice(1); }
-  if (!/^gasto(~|$)/i.test(h)) return null;
-  const [, imp = '', com = '', cta = ''] = h.split('~');
-  let a = imp.replace(/[^0-9.]/g, ''); const ps = a.split('.'); if (ps.length > 2) a = ps.slice(0, -1).join('') + '.' + ps[ps.length - 1];
-  const n = parseFloat(a);
-  return {h, importe: isFinite(n) && n > 0 ? r2(n) : '', comercio: com.replace(/_+/g, ' ').trim(), cta: cta.replace(/_+/g, ' ').trim().toLowerCase()};
-}
-function abrirDesdeCartera(){
-  const p = leerHashCartera(); if (!p || !S.cfg) return;
-  try { history.replaceState(null, '', location.pathname + location.search); } catch {}
-  try { const last = JSON.parse(localStorage.getItem('cartera-ultimo') || 'null'); if (last && last.h === p.h && Date.now() - last.t < 60000) return; localStorage.setItem('cartera-ultimo', JSON.stringify({h:p.h, t:Date.now()})); } catch {}
-  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
-  const nc = norm(p.comercio), prev = nc ? S.movs.find(m => m.tipo === 'gasto' && norm(m.detalle) === nc) : null;
-  let cat = prev?.cat || null, cuenta = prev?.cuenta || null;
-  if (!cat && p.comercio){ const g = parseRapido(p.comercio + ' 1', S.cfg.categorias, hoyISO()); cat = g?.cat || null; }
-  if (p.cta){ const c = S.cuentas.find(x => x.nombre.toLowerCase().split(/[^\p{L}\p{N}]+/u).some(w => w.length >= 3 && p.cta.includes(w))); if (c) cuenta = c.id; }
-  if (!cuenta) cuenta = S.cfg.sobre.cuenta || S.cfg.cuentaPrincipal || null;
-  if (!$('#sheet').hidden) closeSheet();
-  S.tab = 'inicio'; render();
-  sheetMov(null, {tipo:'gasto', importe:p.importe, detalle:bonito(p.comercio), cat, cuenta,
-    nota: prev ? `Categoría y cuenta como la última vez en ${bonito(p.comercio)}. Revisa y pulsa Añadir.` : 'Pago con la Cartera. Revisa la categoría y pulsa Añadir.'});
-}
-window.addEventListener('hashchange', () => { if (S.cfg) abrirDesdeCartera(); });
-function sheetCartera(){
-  const copia = (id, val, label) => `<div class="fld"><span class="lbl">${label}</span><div class="copyrow"><input id="${id}" readonly value="${esc(val)}" aria-label="${label}"><button type="button" class="btn small ghost" data-copy="${id}">Copiar</button></div></div>`;
-  openSheet('Pagos con la Cartera', `<div class="form">
-    <p class="lead">Con una automatización de Atajos, cada vez que pagues con el iPhone se abre esta app con el gasto ya relleno: importe, comercio y categoría. Solo tienes que revisar y pulsar Añadir.</p>
-    <ol class="pasos">
-      <li>Abre <b>Atajos</b>, ve a la pestaña <b>Automatización</b> y pulsa <b>+</b>.</li>
-      <li>Elige <b>Transacción</b> (en iOS 26 se llama <b>Cartera</b>). Marca tu tarjeta de Revolut y deja todas las categorías. Elige <b>Ejecutar inmediatamente</b>, quita la notificación y empieza una automatización en blanco.</li>
-      <li>Añade la acción <b>Texto</b> y escribe: el importe, el símbolo <b>~</b> y el comercio. El importe y el comercio los insertas desde <b>Entrada del atajo</b>, en la barra que sale encima del teclado.</li>
-      <li>Añade <b>Reemplazar texto</b>: busca <b>,</b> (coma) y reemplaza por <b>.</b> (punto).</li>
-      <li>Añade otro <b>Reemplazar texto</b>, activa <b>Expresión regular</b>, busca el texto «Para el paso 5» de abajo y reemplaza por <b>_</b> (guion bajo).</li>
-      <li>Añade otra acción <b>Texto</b>: pega el enlace «Para el paso 6» y, justo detrás, inserta el resultado del paso 5.</li>
-      <li>Añade <b>Abrir URL</b> con ese texto. Listo.</li>
-    </ol>
-    ${copia('cpRegex', CARTERA_REGEX, 'Para el paso 5')}
-    ${copia('cpUrl', appUrl() + '#gasto~', 'Para el paso 6')}
-    <p class="note">Al final, el enlace que se abre queda así: …#gasto~12.30~MERCADONA. La primera vez que pagues en un sitio, revisa la categoría. Las siguientes, la app recuerda la que usaste.</p>
-    <p class="note">Si alguna vez pagas con el BBVA, crea otra automatización igual para esa tarjeta y añade <b>~bbva</b> al final del texto del paso 3: el gasto irá a esa cuenta.</p>
-    ${S.mode === 'db' ? '' : '<p class="note warn">Ojo: Atajos abre el enlace en Safari, y el icono de la pantalla de inicio guarda sus datos aparte de Safari. Conecta los dos a GitHub (Ajustes → Guardar en GitHub) y verás lo mismo en ambos.</p>'}
-    <a class="btn ghost" href="#gasto~12.30~Mercadona_prueba">Probar con un gasto de ejemplo</a>
-  </div>`, root => {
-    root.addEventListener('click', async e => { const b = e.target.closest('[data-copy]'); if (!b) return; const inp = root.querySelector('#' + b.dataset.copy);
-      try { await navigator.clipboard.writeText(inp.value); b.textContent = 'Copiado'; } catch { inp.focus(); inp.select(); b.textContent = 'Selecciona y copia'; } });
-  });
-}
-
 /* Reiniciar configuración */
 function sheetReset(){
   const man = S.movs.filter(m => !m.rec), auto = S.movs.length - man.length;
@@ -2725,7 +2667,7 @@ const ACT = {
   'ver-movs': () => ir('movimientos', false),
   'export-json': () => exportar('json'), 'export-csv': () => exportar('csv'),
   reset: () => sheetReset(),
-  cartera: () => sheetCartera(), adelanto: () => sheetAdelanto(),
+  adelanto: () => sheetAdelanto(),
   'anotar-nomina': b => { const rc = S.recs.find(x => x.id === b.dataset.id); if (!rc) return; const p = nominaPendiente(rc, hoyISO()) || {}; sheetMov(null, {tipo:'ingreso', cat:rc.cat, cuenta:rc.cuenta, detalle:rc.detalle || 'Nómina', nota: p.ult ? `La última fue de ${eur(p.ult.importe)}.` : `Tu estimación: unos ${eur(rc.importe, {dec:0})}.`}); },
   github: () => sheetGithub(), 'ya-datos': () => sheetYaDatos(),
   pin: b => teclaPin(b.dataset.k), 'pin-del': () => borrarPin(), 'pin-fid': () => entrarFaceId(false),
