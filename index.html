@@ -611,16 +611,17 @@ function saldoCuenta(c, movs, sobre, hoy){
 
 function estadoSobre(sobre, movs, hoy){
   const ini = weekStart(hoy, sobre.dia), fin = addDays(ini, 6), prox = addDays(ini, 7);
-  let gastado = 0, extra = 0, entradas = 0;
+  let gastado = 0, extra = 0, entradas = 0, arrIn = 0, arrOut = 0;
   for (const m of movs){
+    if (m.arrastre === ini) arrOut += m.importe;   /* lo que sobró esta semana y pasó a la siguiente */
     if (m.fecha < ini || m.fecha > fin || m.stby) continue;
     if (m.tipo==='gasto' && m.cuenta===sobre.cuenta) gastado += m.importe;
     else if (m.tipo==='ingreso' && m.cuenta===sobre.cuenta) entradas += m.importe;
-    else if (m.tipo==='traspaso'){ if (m.hacia===sobre.cuenta) extra += m.importe; if (m.desde===sobre.cuenta) extra -= m.importe; }
+    else if (m.tipo==='traspaso'){ if (m.arrastre) arrIn += m.importe; else { if (m.hacia===sobre.cuenta) extra += m.importe; if (m.desde===sobre.cuenta) extra -= m.importe; } }
   }
   const adelDe = adelantoA(movs, ini), adelProx = adelantoA(movs, prox);
-  const disponible = r2(sobre.importe - adelDe + extra + entradas), queda = r2(disponible - gastado), diasRest = diffDays(hoy, prox);
-  return {ini, fin, prox, adelDe, adelProx, gastado:r2(gastado), extra:r2(extra), entradas:r2(entradas), disponible, queda, diasRest, porDia: diasRest>0 ? r2(Math.max(queda,0)/diasRest) : 0};
+  const disponible = r2(sobre.importe - adelDe + extra + entradas + arrIn - arrOut), queda = r2(disponible - gastado), diasRest = diffDays(hoy, prox);
+  return {ini, fin, prox, adelDe, adelProx, arrIn:r2(arrIn), arrOut:r2(arrOut), gastado:r2(gastado), extra:r2(extra), entradas:r2(entradas), disponible, queda, diasRest, porDia: diasRest>0 ? r2(Math.max(queda,0)/diasRest) : 0};
 }
 
 function resumenMes(ym, movs, cuentas){
@@ -993,7 +994,10 @@ const vSinCfg = (t) => (S.def.cfg || S.mode !== 'db') ? emptyCfg(t) : vCargando(
 
 function movRow(m, o = {}){
   const cm = ctasMap(); let title, sub, cls = '', amt, icon;
-  if (m.tipo === 'traspaso'){
+  if (m.tipo === 'traspaso' && m.arrastre){
+    title = m.detalle || 'Sobrante del sobre'; sub = `De la semana del ${fechaDM(m.arrastre)}`;
+    icon = `<span class="ico tr">${ic('arrows')}</span>`; amt = eur(m.importe, {signo:true});
+  } else if (m.tipo === 'traspaso'){
     const d = cm[m.desde], h = cm[m.hacia], sac = esAhorro(d) && !esAhorro(h) && !String(m.hacia).startsWith('deuda:');
     title = m.detalle || `${ctaNombre(m.desde)} → ${ctaNombre(m.hacia)}`;
     sub = (sac ? 'De ahorros · ' : '') + `${ctaNombre(m.desde)} → ${ctaNombre(m.hacia)}`;
@@ -1144,14 +1148,15 @@ function heroAdelanto(sb, e, hoy){
   const dia = DIAS[sb.dia], recDe = r2(sb.importe - e.adelDe), recProx = r2(sb.importe - e.adelProx);
   const de = e.adelDe > 0 ? `<p class="hero-sub">${hoy === e.ini ? `Hoy te pasas ${eur(recDe)} a la tarjeta, no ${eur(sb.importe)}` : `El ${dia} te pasaste ${eur(recDe)} a la tarjeta`}: adelantaste ${eur(e.adelDe)} la semana pasada.</p>` : '';
   const prox = e.adelProx > 0 ? `<p class="hero-sub">Has adelantado ${eur(e.adelProx)} del sobre de la semana que viene: el ${dia} solo te pasas ${eur(recProx)}.</p>` : '';
-  return de + prox + `<button class="hero-adel" data-act="adelanto">${ic(e.adelProx > 0 ? 'arrows' : 'arrowin', 15, 2.2)}${e.adelProx > 0 ? 'Cambiar el adelanto' : 'Adelantar de la semana que viene'}</button>`;
+  const arr = e.arrIn > 0 ? `<p class="hero-sub">Incluye ${eur(e.arrIn)} que te sobraron la semana pasada.</p>` : '';
+  return arr + de + prox + `<button class="hero-adel" data-act="adelanto">${ic(e.adelProx > 0 ? 'arrows' : 'arrowin', 15, 2.2)}${e.adelProx > 0 ? 'Cambiar el adelanto' : 'Adelantar de la semana que viene'}</button>`;
 }
 /* Lo que sobró del sobre la semana pasada. Si lo apartas, va con fecha del último día de esa semana:
    así sale de lo que sobró y no del sobre de esta. Si lo dejas en la tarjeta, cuenta como lo que te sobra este mes */
 function sobranteSemana(hoy){
   const sb = S.cfg.sobre; if (!(sb.importe > 0 && sb.cuenta)) return null;
   const ini = addDays(weekStart(hoy, sb.dia), -7), t = S.cuentas.find(c => c.id === sb.cuenta);
-  if (ini < inicioApp() + '-01' || !t || (t.fechaBase && t.fechaBase > ini) || S.cfg.sobraVista === ini) return null;
+  if (ini < inicioApp() + '-01' || !t || (t.fechaBase && t.fechaBase > ini)) return null;
   const e = estadoSobre(sb, S.movs, ini), huchas = ordenCuentas().filter(c => (c.tipo === 'hucha' || esAhorro(c)) && c.id !== sb.cuenta && c.id !== sb.origen);
   return e.queda >= 0.01 && huchas.length ? {e, huchas} : null;
 }
@@ -1159,23 +1164,24 @@ function vSobrante(hoy){
   const x = sobranteSemana(hoy); if (!x) return '';
   const {e, huchas} = x, pre = huchas.some(c => c.id === S.cfg.sobraHucha) ? S.cfg.sobraHucha : huchas[0].id;
   return `<section class="card nudge"><div style="display:grid;gap:6px"><h2 class="big">Te sobraron ${eur(e.queda)} del sobre</h2>
-    <p class="muted">De la semana del ${fechaDM(e.ini)} al ${fechaDM(e.fin)}. ¿Los apartas en una hucha? Si los dejas en la tarjeta, cuentan como lo que te sobra este mes.</p></div>
+    <p class="muted">De la semana del ${fechaDM(e.ini)} al ${fechaDM(e.fin)}. ¿Los apartas en una hucha o los sumas al sobre de esta semana?</p></div>
     <div class="form"><div class="fld"><label for="sobHucha">¿En cuál?</label><select id="sobHucha">${huchas.map(c => `<option value="${esc(c.id)}" ${c.id === pre ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}</select></div></div>
-    <div class="recbtns"><button class="btn primary" data-act="sobra-si">Apartar ${eur(e.queda)}</button><button class="btn ghost" data-act="sobra-no">Dejarlos en la tarjeta</button></div></section>`;
+    <div class="recbtns"><button class="btn primary" data-act="sobra-si">Apartar ${eur(e.queda)}</button><button class="btn ghost" data-act="sobra-no">Sumar a esta semana</button></div></section>`;
 }
 async function cerrarSobrante(apartar){
   const x = sobranteSemana(hoyISO()); if (!x) return;
   const {e} = x, sb = S.cfg.sobre, hacia = $('#sobHucha')?.value;
   if (apartar && hacia){
     await guardar(async () => {
-      await store.set('mov', 'sobra-' + e.ini, {fecha:e.fin, tipo:'traspaso', importe:e.queda, detalle:'Lo que sobró del sobre', cat:null, cuenta:null, desde:sb.cuenta, hacia, rec:null, mes:null, creado:new Date().toISOString()});
+      await store.set('mov', 'sobra-' + e.ini, {fecha:e.fin, tipo:'traspaso', importe:e.queda, detalle:'Sobrante del sobre', cat:null, cuenta:null, desde:sb.cuenta, hacia, rec:null, mes:null, creado:new Date().toISOString()});
       await store.setCfg({...S.cfg, sobraHucha:hacia});
     }, `Apartados ${eur(e.queda)} en ${ctaNombre(hacia)}`);
-  } else await guardar(() => store.setCfg({...S.cfg, sobraVista:e.ini}), 'Se quedan en la tarjeta');
+  } else await guardar(() => store.set('mov', 'sobra-' + e.ini, {fecha:addDays(e.fin, 1), tipo:'traspaso', importe:e.queda, detalle:'Sobrante del sobre', cat:null, cuenta:null, desde:sb.cuenta, hacia:sb.cuenta, arrastre:e.ini, rec:null, mes:null, creado:new Date().toISOString()}),
+    `Sumados ${eur(e.queda)} al sobre de esta semana`);
 }
 function heroExtra(sb, e){
   const cm = ctasMap(); let ah = 0, otro = 0;
-  for (const m of S.movs){ if (m.tipo !== 'traspaso' || m.hacia !== sb.cuenta || m.fecha < e.ini || m.fecha > e.fin || m.adelanto) continue; if (esAhorro(cm[m.desde])) ah += m.importe; else otro += m.importe; }
+  for (const m of S.movs){ if (m.tipo !== 'traspaso' || m.hacia !== sb.cuenta || m.fecha < e.ini || m.fecha > e.fin || m.adelanto || m.arrastre) continue; if (esAhorro(cm[m.desde])) ah += m.importe; else otro += m.importe; }
   return (ah > 0 ? `<p class="hero-note">Esta semana has sacado ${eur(ah)} de tu ahorro para la tarjeta.</p>` : '') + (otro > 0 ? `<p class="hero-sub">Esta semana han entrado ${eur(otro)} más en la tarjeta, de huchas u otras cuentas.</p>` : '');
 }
 const nombreRec = rc => rc.cat === 'nomina' ? 'la nómina' : `«${esc(rc.detalle || catNombre(rc.cat))}»`;
@@ -1952,6 +1958,15 @@ function sheetAdelanto(m){
     const del = q('#adDel'); if (del) armar(del, 'Toca otra vez para quitarlo', () => { closeSheet(); guardar(() => store.del('mov', prev.id), `Adelanto quitado: el ${DIAS[sb.dia]} te pasas ${eur(sb.importe)}`); });
   });
 }
+function sheetArrastre(m){
+  const fin = addDays(m.arrastre, 6);
+  openSheet('Lo que sobró del sobre', `<div class="form">
+    <p class="lead">Los ${eur(m.importe)} que te sobraron la semana del ${fechaDM(m.arrastre)} al ${fechaDM(fin)} se suman al sobre de la semana del ${fechaDM(m.fecha)}. Siguen en ${esc(ctaNombre(m.hacia))}: no se mueve dinero, solo cambia de semana.</p>
+    <div class="actions"><button type="button" class="btn ghost" data-act="close">Cerrar</button><button type="button" class="btn danger" id="arDel">Quitar</button></div>
+  </div>`, root => {
+    armar(root.querySelector('#arDel'), 'Toca otra vez para quitarlo', () => { closeSheet(); guardar(() => store.del('mov', m.id), 'Quitado: te volveré a preguntar qué hacer con ellos'); });
+  });
+}
 function sheetSobre(){
   const c = S.cfg, sb = c.sobre, f = fijosMes(ymOf(hoyISO()));
   openSheet('Sobre semanal', `<form id="fSobre" class="form" novalidate>
@@ -2647,7 +2662,7 @@ const ACT = {
   mes: b => { const cur = ymOf(hoyISO()); const n = addMonths(S.mes || cur, Number(b.dataset.d)); if (n > addMonths(cur, 1)) return; S.mes = n === cur ? null : n; render(); },
   close: () => closeSheet(),
   'new-mov': () => S.cfg ? sheetMov() : sheetSetup(),
-  'edit-mov': b => { const m = S.movs.find(x => x.id === b.dataset.id); if (!m) return; const t = m.stby && S.stby.find(x => x.id === m.stby); if (t) sheetStby(t); else if (m.adelanto) sheetAdelanto(m); else sheetMov(m); },
+  'edit-mov': b => { const m = S.movs.find(x => x.id === b.dataset.id); if (!m) return; const t = m.stby && S.stby.find(x => x.id === m.stby); if (t) sheetStby(t); else if (m.adelanto) sheetAdelanto(m); else if (m.arrastre) sheetArrastre(m); else sheetMov(m); },
   stby: () => ir('stby', true),
   'new-stby': () => S.cfg ? sheetStby() : sheetSetup(),
   'edit-stby': b => { const t = S.stby.find(x => x.id === b.dataset.id); if (t) sheetStby(t); },
